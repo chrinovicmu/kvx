@@ -88,12 +88,4 @@
 #define IA32_SYSENTER_CS                    0x00000174
 
 /*memory regions */
-
-uint64_t *vmxon_region = NULL; 
-uint64_t *vmcs_region  = NULL; 
-
-uint8_t *io_bitmap; 
-void * msr_bitmap; 
-
-
-#endif 
+ #endif 

@@ -24,7 +24,7 @@ struct kvx_vm
 
     int max_vcpus;
     int online_vcpus;
-    struct vcpu **vcpus; 
+    struct vcpu *vcpus; 
 
     vm_state state; 
 

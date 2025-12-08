@@ -148,4 +148,5 @@ struct vmx_vmexec_controls
     struct vmx_procbased_ctls_sec secondary;
     struct vmx_vmexit_clts exit;
     struct vmx_entry_ctls entry; 
-}; 
+};
+
