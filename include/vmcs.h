@@ -150,3 +150,10 @@ struct vmx_vmexec_controls
     struct vmx_entry_ctls entry; 
 };
 
+struct _msr_entry 
+{
+    uint32_t index; 
+    uint32_t reserved; 
+    uint64_t value; 
+}__attribute__ ((packed, aligned(16))); 
+

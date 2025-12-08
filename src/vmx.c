@@ -428,57 +428,6 @@ int init_vmcs_vm_entry_exit_controls(void)
     return 0;
 }
 
-int init_vmcs_io_bitmap(void)
-{
-    phys_addr_t io_bitmap_phys; 
-
-    /*alllocate 2kb pages for the io_bitmap */ 
-
-    io_bitmap = (uint8_t *)__get_free_pages(GFP_KERNEL, VMCS_IO_BITMAP_PAGES_ORDER); 
-
-    if(!io_bitmap)
-    {
-        printk(KERN_ERR "Failed to alllocate I/O bitmap memory\n"); 
-        return -ENOMEM; 
-    }
-
-    /*clear entire io bitmap to 0 : allow i/o ports without vm exits */ 
-
-    memset((void*)io_bitmap, 0, VMCS_IO_BITMAP_SIZE);
-
-    io_bitmap_phys = virt_to_phys((void*)io_bitmap);
-
-    printk(KERN_INFO "Allocated and cleared I/O bitmap at VA %p PA 0x%llx\n",
-           (void*)io_bitmap, (unsigned long long)io_bitmap_phys); 
-
-    if(_vmwrite(VMCS_IO_BITMAP_A, (uint64_t)io_bitmap_phys) != 0)
-    {
-        printk(KERN_ERR "VMWrite IO_BITMAP_A failed\n"); 
-        free_pages((unsigned long)io_bitmap, VMCS_IO_BITMAP_PAGES_ORDER); 
-        return -EIO;
-    }
-
-    if(_vmwrite(VMCS_IO_BITMAP_B, (uint64_t)io_bitmap_phys + VMCS_IO_BITMAP_PAGE_SIZE) != 0)
-    {
-        printk(KERN_ERR "VMWrite IO_BITMAP_B failed\n"); 
-        free_pages((unsigned long)io_bitmap, VMCS_IO_BITMAP_PAGES_ORDER); 
-        return -EIO; 
-    }
-
-    printk(KERN_INFO "VMCS I/O Bitmap field set successfully\n");
-
-    return 0; 
-}
-
-void cleanup_io_bitmap(void)
-{
-    if(io_bitmap)
-    {
-        printk(KERN_INFO "Cleaning up I/O bitmap memory...\n");
-        free_pages((unsigned long)io_bitmap, VMCS_IO_BITMAP_PAGES_ORDER); 
-        io_bitmap = NULL; 
-    }
-}
  
 int init_vmcs_cr_mask_and_shadows(void) 
 {
@@ -549,67 +498,23 @@ int init_vmcs_cr3_targets(void)
     return 0; 
 }
 
-/*allocate and initialize a 4kb msr bitmap, return it's virtual address */ 
-
-void * setup_msr_bitmap(void)
+int exit_msr_store_area(struct vcpu *vcpu)
 {
-    msr_bitmap = kmalloc(4096, GFP_KERNEL | __GFP_ZERO); 
+    if(!vcpu)
+        return -EINVAL; 
 
-    if(!msr_bitmap)
+    vcpu->vmexit_msr_area = kzalloc(sizeof(struct _msr_entry) * MSR_AREA_ENTRIES, GFP_KERNEL | GFP_DMA); 
+
+    if(!vcpu->vmexit_msr_area)
     {
-        printk(KERN_ERR "Failed to allocate MSR bitmap\n"); 
-        return NULL; 
-    }
-
-    uint32_t msr_index = IA32_SYSENTER_CS; 
-    uint8_t *bitmap = (uint8_t *)msr_bitmap; 
-    uint32_t byte = msr_index / 8; 
-    uint8_t bit = msr_index % 8; 
-
-    bitmap[byte] |= (1 << bit); 
-
-    return msr_bitmap;
-}
-
-/*load v,cs bitmap into VMCS */ 
-
-int init_vmcs_msr_bitmap(void *msr_bitmap_virt_addr)
-{
-    uint64_t msr_bitmap_phys_addr; 
-
-    msr_bitmap_phys_addr = virt_to_phys(msr_bitmap_virt_addr); 
-
-    CHECK_VMWRITE(VMCS_MSR_BITMAP, msr_bitmap_phys_addr);
-
-    printk(KERN_INFO "MSR Bitmap setup success\n"); 
-    return 0;
-}
-
-void cleanup_msr_bitmap(void) 
-{
-    if (msr_bitmap) 
-    {
-        printk(KERN_INFO "Cleaning up MSR Bitmap memory...\n"); 
-        kfree(msr_bitmap);
-        msr_bitmap = NULL;
-    }
-}
-
-
-int exit_msr_store_area(void)
-{
-    phys_addr_t exit_phys_addr;
-
-    _vm_exit_msr_area = kzalloc(sizeof(struct _msr_entry) * MSR_AREA_ENTRIES, GFP_KERNEL | GFP_DMA); 
-
-    if(!_vm_exit_msr_area)
-    {
-        printk(KERN_ERR "Failed to allocate Exit MSR area memory region\n");
+        pr_info("Failed to allocate Exit MSR area memory region\n");
         return - ENOMEM; 
     }
 
-    _vm_exit_msr_area[0].index = IA32_SYSENTER_CS; 
-    _vm_exit_msr_area[0].reserved = 0;
+    vcpu->vmexit_area_pa = virt_to_phys(vcpu->vmexit_msr_area); 
+
+    vcpu->vmexit_msr_area[0].index = IA32_SYSENTER_CS; 
+    _vm_exit_msr[0].reserved = 0;
 
     exit_phys_addr = virt_to_phys(_vm_exit_msr_area); 
 

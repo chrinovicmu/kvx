@@ -62,3 +62,61 @@
 #define EXIT_REASON_XSAVES                          0x0000003F
 #define EXIT_REASON_XRSTORS                         0x00000040
 #define EXIT_REASON_PCOMMIT                         0x00000041
+
+void emulate_cpuid(struct vcpu *vcpu);
+void emulate_hlt(struct vcpu *vcpu);
+void emulate_invlpg(struct vcpu *vcpu);
+void emulate_cr_access(struct vcpu *vcpu);
+void emulate_msr_access(struct vcpu *vcpu);
+void handle_ept_violation(struct vcpu *vcpu);
+
+void vmx_vmexit_handler(struct vcpu *vcpu)
+{
+    if (!vcpu)
+        return;
+
+    uint64_t exit_reason = 0;
+
+    /* Read the exit reason from the VMCS */
+    if (_vmread(VM_EXIT_REASON, &exit_reason) != 0) {
+        pr_err("VMCS read failed\n");
+        return;
+    }
+
+    switch (exit_reason) {
+    case EXIT_REASON_CPUID:
+        emulate_cpuid(vcpu);
+        break;
+
+    case EXIT_REASON_HLT:
+        emulate_hlt(vcpu);
+        break;
+
+    case EXIT_REASON_INVLPG:
+        emulate_invlpg(vcpu);
+        break;
+
+    case EXIT_REASON_CR_ACCESS:
+        emulate_cr_access(vcpu);
+        break;
+
+    case EXIT_REASON_MSR_READ:
+    case EXIT_REASON_MSR_WRITE:
+        emulate_msr_access(vcpu);
+        break;
+
+    case EXIT_REASON_EPT_VIOLATION:
+        handle_ept_violation(vcpu);
+        break;
+
+    default:
+        pr_err("Unexpected VM exit reason: %llu\n", exit_reason);
+        /* Optional: terminate guest or log */
+        break;
+    }
+
+    /* Resume guest execution */
+    if (_vmresume() != 0) {
+        pr_err("VMRESUME failed\n");
+    }
+}

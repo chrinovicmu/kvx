@@ -214,15 +214,5 @@ static inline int _get_vmcs_size(void)
     printk(KERN_INFO "VMX_BASIC MSR: 0x%llx, VMCS size: %u bytes\n", vmx_basic, vmcs_size);
     return vmcs_size;
 }
-struct _msr_entry 
-{
-    uint32_t index; 
-    uint32_t reserved; 
-    uint64_t value; 
-}__attribute__ ((packed, aligned(16))); 
-
-struct _msr_entry *_vm_exit_msr_area; 
-struct _msr_entry *_vm_entry_msr_area; 
-
 
 #endif 

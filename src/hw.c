@@ -8,11 +8,14 @@
 #include <linux/printk.h>
 #include <asm/processor.h>
 #include <asm/msr.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #include "hw.h"
 #include "vmcs.h"
 #include "vmx_ops.h"
 #include "vmx_consts.h"
+
 
 int setup_vmxon_region(struct vcpu *vcpu)
 {
@@ -81,7 +84,8 @@ int setup_msr_bitmap(struct vcpu *vcpu)
     if(!vcpu->msr_bitmap)
         return -ENOMEM;
 
-    vcpu->msr_bitmap_pa = virt_to_p
+    vcpu->msr_bitmap_pa = virt_to_phys(vcpu->msr_bitmap); 
+}
 
 int setup_vmxon_region(struct vcpu *vcpu)
 {
@@ -117,7 +121,7 @@ int setup_vmcs_region(struct vcpu *vcpu)
     *(uint32_t *)vcpu->vmcs = _vmcs_revision_id();
     vcpu->vmcs_pa = virt_to_phys(vcpu->vmcs); 
 
-    return 0 ;
+    return 0;
 
 }
 
@@ -188,6 +192,73 @@ int setup_msr_bitmap(struct vcpu *vcpu)
     }
 }
 
+/*util round size up to full pagess and computer order */ 
+static inline unsigned int msr_area_order(size_t bytes)
+{
+    size_t pages  = DIV_ROUND_UP(bytes, PAGE_SIZE); 
+    return get_order(pages * PAGE_SIZE); 
+}
+
+static struct msr_entry *alloc_msr_entry(size_t n_entries)
+{
+    size_t size = n_entries * sizeof(struct msr_entry); 
+    unsigned int order = msr_area_order(size); 
+
+    struct page *p = alloc_pages(GFP_KERNEL | __GFP_ZERO, order); 
+    if(!p)
+        return NULL; 
+
+    return (struct msr_entry*)page_address(p); 
+}
+
+static void free_msr_area(struct msr_entry *area, size_t n_entries)
+{
+    if(!area)
+        return; 
+
+    size_t size = n_entries * sizeof(struct msr_entry); 
+    unsigned int order = msr_area_order(size); 
+    free_pages((unsigned long)area, order); 
+}
+
+/*populate msr-load are from parallel arrays */ 
+static void populate_msr_load_area(struct msr_entry *area, size_t count,
+                              const uint32_t *indices, const uint32_t *values)
+{
+    size_t i; 
+    for(i = 0; i < count; ++i)
+    {
+        area[i].index = indices[i]; 
+        area[i].reserved = 0; 
+        area[i].value = values[i]; 
+    }
+
+}
+
+/*populate MSR-store areas index fields. CPU will write this values on VM-exit */ 
+static void populate_msr_store_area(struct msr_entry *area, size_t count, 
+                                    const uint32_t *indices)
+{
+    size_t i;
+    for(i = 0; i < count; ++i)
+    {
+        area[i].index = indices[i];
+        area[i].reserved = 0; 
+        area[i].value = 0; 
+    }
+
+}
+
+int setup_msr_areas(struct vcpu *vcpu, 
+                    const uint32_t *vmexit_list, size_t vmexit_count, 
+                    const uint32_t *vmentry_list, const uint32_t *vmentry_values, 
+                    size_t vmentry_count)
+{
+    struct msr_entry *vmexit_store = NULL;
+    struct msr_entry *vmexit_load = NULL; 
+    struct msr_entry *vmentry_load = NULL; 
+
+}
 struct vcpu *create_vcpu(struct kvx_vm *vm, int vcpu_id)
 {
     struct vcpu *vcpu;

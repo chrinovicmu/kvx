@@ -40,6 +40,12 @@ struct vcpu {
     uint8_t *io_bitmap;
     u64 io_bitmap_pa;
 
+    struct _msr_entry *vmexit_msr_area; 
+    u64 vmexit_area_pa; 
+
+    struct _msr_entry *vmentry_msr_area; 
+    u64 vmentry_area_pa; 
+
     struct guest_regs regs;
 
     unsigned long cr0, cr3, cr4, cr8;
@@ -56,6 +62,7 @@ int setup_vmxon_region(struct vcpu *vcpu);
 int setup_vmcs_region(struct vcpu *vcpu);
 int setup_io_bitmap(struct vcpu *vcpu); 
 int setup_msr_bitmap(struct vcpu *vcpu); 
+
 void free_vmxon_region(struct vcpu *vcpu);
 void free_vmcs_region(struct vcpu *vcpu); 
 void free_io_btimap(struct vcpu *vcpu); 
