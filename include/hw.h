@@ -21,6 +21,7 @@ struct guest_regs {
     unsigned long cs, ds, es, fs, gs, ss;
 };
 
+
 /* Virtual CPU structure */
 struct vcpu {
     struct kvx_vm *vm;
@@ -40,11 +41,17 @@ struct vcpu {
     uint8_t *io_bitmap;
     u64 io_bitmap_pa;
 
-    struct _msr_entry *vmexit_msr_area; 
-    u64 vmexit_area_pa; 
+    struct msr_entry *vmexit_store_area; 
+    u64 vmexit_store_pa;
 
-    struct _msr_entry *vmentry_msr_area; 
-    u64 vmentry_area_pa; 
+    struct msr_entry *vmexit_load_area; 
+    u64 vmexit_load_pa; 
+
+    struct msr_entry *vmentry_load_area; 
+    u64 vmentry_load_pa;
+
+    size_t vmexit_count;
+    size_t vmentry_count; 
 
     struct guest_regs regs;
 

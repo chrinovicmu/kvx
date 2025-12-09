@@ -1,3 +1,4 @@
+#include <cerrno>
 #include <linux/slab.h>
 #include <linux/gfp.h>
 #include <linux/mm.h>
@@ -248,17 +249,133 @@ static void populate_msr_store_area(struct msr_entry *area, size_t count,
     }
 
 }
-
-int setup_msr_areas(struct vcpu *vcpu, 
-                    const uint32_t *vmexit_list, size_t vmexit_count, 
-                    const uint32_t *vmentry_list, const uint32_t *vmentry_values, 
+int setup_msr_areas(struct vcpu *vcpu,
+                    const uint32_t *vmexit_list,  size_t vmexit_count,
+                    const uint32_t *vmentry_list, const uint32_t *vmentry_values,
                     size_t vmentry_count)
 {
-    struct msr_entry *vmexit_store = NULL;
-    struct msr_entry *vmexit_load = NULL; 
-    struct msr_entry *vmentry_load = NULL; 
+    int rc = 0;
+    size_t i;
 
+    if (!vcpu)
+        return -EINVAL;
+
+        /* VMCS count fields are 16-bit */
+    if (vmexit_count > UINT16_MAX || vmentry_count > UINT16_MAX)
+        returm -EINVAL; 
+
+    /*VM-exit MSR-store area (guest MSRs → memory on exit) */
+    vcpu->vmexit_store_area = alloc_msr_entry(vmexit_count);
+    if (!vcpu->vmexit_store_area) {
+        rc = -ENOMEM;
+        goto out;
+    }
+    vcpu->vmexit_store_pa = page_to_phys(virt_to_page(vcpu->vmexit_store_area));
+
+    /* VM-exit MSR-load area (memory → host MSRs on exit) */
+    vcpu->vmexit_load_area = alloc_msr_entry(vmentry_count);
+    if (!vcpu->vmexit_load_area)
+    {
+        rc = -ENOMEM;
+        goto out_free_exit_store;
+    }
+    vcpu->vmexit_load_pa = page_to_phys(virt_to_page(vcpu->vmexit_load_area));
+
+    /* VM-entry MSR-load area (memory → guest MSRs on entry) */
+    vcpu->vmentry_load_area = alloc_msr_entry(vmentry_count);
+    if (!vcpu->vmentry_load_area) 
+    {
+        rc = -ENOMEM;
+        goto out_free_exit_load;
+    }
+    vcpu->vmentry_load_pa = page_to_phys(virt_to_page(vcpu->vmentry_load_area));
+
+    populate_msr_store_area(vcpu->vmexit_store_area, vmexit_count, vmexit_list);
+
+    /* On VM-exit, restore host MSR values (typically the ones the guest sees on entry) */
+    for (i = 0; i < vmentry_count; ++i) 
+    {
+        uint32_t idx = vmentry_list[i];
+        uint64_t val = 0;
+
+            /* Some MSRs may not be readable; policy decision required */
+            val = vmentry_values ? vmentry_values[i] : 0;
+        }
+
+        vcpu->vmexit_load_area[i].index    = idx;
+        vcpu->vmexit_load_area[i].reserved = 0;
+        vcpu->vmexit_load_area[i].value    = val;
+    }
+
+    populate_msr_load_area(vcpu->vmentry_load_area,
+                           vmentry_count,
+                           vmentry_list,
+                           vmentry_values);
+
+    vcpu->vmexit_count  = vmexit_count;
+    vcpu->vmentry_count = vmentry_count;
+
+    if (_vmwrite(VMX_EXIT_MSR_STORE_ADDR, vcpu->vmexit_store_pa) ||
+        _vmwrite(VMX_EXIT_MSR_STORE_COUNT, (uint64_t)vmexit_count) ||
+        _vmwrite(VMX_EXIT_MSR_LOAD_ADDR,   vcpu->vmexit_load_pa) ||
+        _vmwrite(VMX_EXIT_MSR_LOAD_COUNT,  (uint64_t)vmentry_count) ||
+        _vmwrite(VMX_ENTRY_MSR_LOAD_ADDR,  vcpu->vmentry_load_pa) ||
+        _vmwrite(VMX_ENTRY_MSR_LOAD_COUNT, (uint64_t)vmentry_count)) 
+    {
+        rc = -EIO;
+        goto out_free_all;
+    }
+
+    return 0;
+
+out_free_all:
+    free_msr_area(vcpu->vmentry_load_area, vmentry_count);
+    vcpu->vmentry_load_area = NULL;
+    vcpu->vmentry_load_pa = 0;
+
+out_free_exit_load:
+    free_msr_area(vcpu->vmexit_load_area, vmentry_count);
+    vcpu->vmexit_load_area = NULL;
+    vcpu->vmexit_load_pa = 0;
+
+out_free_exit_store:
+    free_msr_area(vcpu->vmexit_store_area, vmexit_count);
+    vcpu->vmexit_store_area = NULL;
+    vcpu->vmexit_store_pa = 0;
+
+out:
+    return rc;
 }
+
+void free_all_msr_areas(struct vcpu *vcpu)
+{
+    if (!vcpu)
+        return;
+
+    if (vcpu->vmexit_store_area)
+    {
+        free_msr_area(vcpu->vmexit_store_area, vcpu->vmexit_count);
+        vcpu->vmexit_store_area = NULL;
+        vcpu->vmexit_store_pa = 0;
+    }
+
+    if (vcpu->vmexit_load_area) 
+    {
+        free_msr_area(vcpu->vmexit_load_area, vcpu->vmentry_count);
+        vcpu->vmexit_load_area = NULL;
+        vcpu->vmexit_load_pa = 0;
+    }
+
+    if (vcpu->vmentry_load_area) 
+    {
+        free_msr_area(vcpu->vmentry_load_area, vcpu->vmentry_count);
+        vcpu->vmentry_load_area = NULL;
+        vcpu->vmentry_load_pa = 0;
+    }
+
+    vcpu->vmexit_count = vcpu->vmentry_count = 0;
+}
+
 struct vcpu *create_vcpu(struct kvx_vm *vm, int vcpu_id)
 {
     struct vcpu *vcpu;
