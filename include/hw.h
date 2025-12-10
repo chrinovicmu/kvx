@@ -27,13 +27,13 @@ struct vcpu {
     struct kvx_vm *vm;
     int vcpu_id;
 
-    struct vmcs *vmcs;
+    struct vmcs_region *vmcs;
     u64 vmcs_pa;
 
     struct vmxon_region *vmxon;
     u64 vmxon_pa;
 
-    struct vmx_vmexec_controls vmexec_ctl;
+    struct vmx_exec_ctrls controls; 
 
     void *msr_bitmap;
     u64 msr_bitmap_pa; 
@@ -65,10 +65,11 @@ struct vcpu {
 };
 
 /* Function declarations */
-int setup_vmxon_region(struct vcpu *vcpu);
-int setup_vmcs_region(struct vcpu *vcpu);
-int setup_io_bitmap(struct vcpu *vcpu); 
-int setup_msr_bitmap(struct vcpu *vcpu); 
+int vmx_setup_vmxon_region(struct vcpu *vcpu);
+int vmx_setup_vmcs_region(struct vcpu *vcpu);
+int vmx_setup_io_bitmap(struct vcpu *vcpu); 
+int vmx_setup_msr_bitmap(struct vcpu *vcpu); 
+int vmx_setup_exec_controls(struct vcpu *vcpu); 
 
 void free_vmxon_region(struct vcpu *vcpu);
 void free_vmcs_region(struct vcpu *vcpu); 
