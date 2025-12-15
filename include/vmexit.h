@@ -1,5 +1,6 @@
 #pragma once 
 
+#include <stdint.h>
 #define VM_EXIT_REASON                              0x00004402
 
 #define EXIT_REASON_EXCEPTION_NMI                   0x00000000

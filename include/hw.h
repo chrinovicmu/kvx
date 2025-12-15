@@ -26,6 +26,8 @@ struct vcpu {
 
     struct kvx_vm *vm;
 
+    struct task_struct *host_struct; 
+
     int vcpu_id;
     int host_cpu_id; 
 
@@ -75,7 +77,7 @@ struct host_cpu
     spinlock_t lock; 
 }; 
 
-
+int kvx_vcpu_pin_to_cpu(struct vcpu *vcpu, int target_cpu_id); 
 /* Function declarations */
 int vmx_setup_vmxon_region(struct vcpu *vcpu);
 int vmx_setup_vmcs_region(struct vcpu *vcpu);

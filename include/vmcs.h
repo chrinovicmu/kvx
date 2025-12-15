@@ -169,3 +169,29 @@ struct _msr_entry
     uint64_t value; 
 }__attribute__ ((packed, aligned(16))); 
 
+const uint32_t kvx_vmexit_msr_indices[] = {
+    MSR_IA32_EFER,
+    MSR_IA32_STAR,
+    MSR_IA32_LSTAR,
+    MSR_IA32_CSTAR,
+    MSR_IA32_FMASK,
+    MSR_IA32_FS_BASE,
+    MSR_IA32_GS_BASE
+};
+const size_t kvx_vmexit_count = ARRAY_SIZE(kvx_vmexit_msr_indices);
+
+const uint32_t kvx_vmentry_msr_indices[] = {
+    MSR_IA32_EFER,
+    MSR_IA32_STAR,
+    MSR_IA32_LSTAR,
+    MSR_IA32_CSTAR,
+    MSR_IA32_FMASK,
+    MSR_IA32_FS_BASE,
+    MSR_IA32_GS_BASE
+};
+
+const size_t kvx_vmentry_count = ARRAY_SIZE(kvx_vmentry_msr_indices);
+
+uint64_t kvx_vmentry_msr_values[kvx_vmentry_count]; 
+
+#endif 
