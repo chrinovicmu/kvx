@@ -10,6 +10,8 @@
 #include "vmx_ops.h"
 #include "vmcs.h"
 
+#define KVX_MAX_MANAGED_MSRS 8 
+
 struct kvx_vm;  // forward declaration
 
 /* Guest registers */
@@ -42,6 +44,7 @@ struct vcpu {
     uint8_t *io_bitmap;
     u64 io_bitmap_pa;
 
+    /*MSR managment */ 
     struct msr_entry *vmexit_store_area; 
     u64 vmexit_store_pa;
 
@@ -50,6 +53,9 @@ struct vcpu {
 
     struct msr_entry *vmentry_load_area; 
     u64 vmentry_load_pa;
+
+    uint32_t msr_indices[KVX_MAX_MANAGED_MSRS]; 
+    uint32_t msr_count; 
 
     size_t vmexit_count;
     size_t vmentry_count; 
