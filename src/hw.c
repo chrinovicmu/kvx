@@ -20,7 +20,39 @@
 #include "vmx_consts.h"
 #include "../utils/utils.h"
 
+static int kvx_setup_vmxon_region(struct host_cpu *hcpu);
+static int kvx_setup_vmcs_region(struct vcpu *vcpu);
+static int kvx_setup_io_bitmap(struct vcpu *vcpu);
+static int kvx_setup_msr_bitmap(struct vcpu *vcpu);
+static int kvx_setup_msr_areas(struct vcpu *vcpu,
+                               const uint32_t *vmexit_list,  size_t vmexit_count,
+                               const uint32_t *vmentry_list, const uint32_t *vmentry_values,
+                               size_t vmentry_count);
 
+static int kvx_vcpu_setup_msr_state(struct vcpu *vcpu);
+static int kvx_setup_exec_controls(struct vcpu *vcpu);
+static int vmx_apply_exec_controls(struct vcpu *vcpu);
+static void vmx_init_exec_controls(struct vcpu *vcpu);
+
+static void kvx_free_io_bitmap(struct vcpu *vcpu);
+static void kvx_free_msr_bitmap(struct vcpu *vcpu);
+static void kvx_free_vmcs_region(struct vcpu *vcpu);
+static void kvx_free_all_msr_areas(struct vcpu *vcpu);
+static void free_vmxon_region(struct host_cpu *hcpu);
+
+static struct msr_entry *alloc_msr_entry(size_t n_entries);
+static void free_msr_area(struct msr_entry *area, size_t n_entries);
+static void populate_msr_load_area(struct msr_entry *area, size_t count,
+                                   const uint32_t *indices, const uint32_t *values);
+static void populate_msr_store_area(struct msr_entry *area, size_t count, 
+                                    const uint32_t *indices);
+
+static inline bool kvx_vcpu_io_bitmap_enabled(struct vcpu *vcpu);
+static inline bool kvx_vcpu_msr_bitmap_enabled(struct vcpu *vcpu);
+static inline unsigned int msr_area_order(size_t bytes);
+
+
+/*pin vcpu thread to a specific physical host cpu for cpu affinity*/ 
 int kvx_vcpu_pin_to_cpu(struct vcpu *vcpu, int target_cpu_id)
 {
     int ret; 
@@ -44,7 +76,7 @@ int kvx_vcpu_pin_to_cpu(struct vcpu *vcpu, int target_cpu_id)
     cpumask_set_cpu(target_cpu_id, &new_mask); 
 
     ret = set_cpus_allowed_ptr(vcpu->host_task, &new_mask); 
-    if(ret)
+    if(ret == 0)
     {
         PDEBUG("KVX: Successfuly pinned VCPU %d to Host CPU %d.\n", 
                vcpu->vcpu_id, target_cpu_id); 
@@ -66,7 +98,7 @@ static inline bool kvx_vcpu_io_bitmap_enabled(struct vcpu *vcpu)
 }
 
 /*MSR bitmap bit in the execution controls need to be set in order to use msr bimaps */ 
-static inline bool kvx_vcpu_msr_bitmap_enabled(struct vcpu)
+static inline bool kvx_vcpu_msr_bitmap_enabled(struct vcpu *vcpu)
 {
     return vcpu->controls.primary_proc & VMCS_PROC_USE_MSR_BITMAPS; 
 }
@@ -78,7 +110,7 @@ void kvx_vcpu_unpin_and_stop(struct vcpu *vcpu)
     kthread_stop(vcpu->host_task); 
 }
 
-struct host_cpu * host_cpu_create(int logical_cpu_id, in max_vcpus)
+struct host_cpu * host_cpu_create(int logical_cpu_id, int max_vcpus)
 {
     struct host_cpu * hcpu; 
     size_t vcpu_array_size; 
@@ -89,13 +121,17 @@ struct host_cpu * host_cpu_create(int logical_cpu_id, in max_vcpus)
 
     hcpu->logical_cpu_id = logical_cpu_id; 
 
-    if(vmx_setup_vmxon_region(hcpu) != 0)
+    if(kvx_setup_vmxon_region(hcpu) != 0)
     {
-        pr_err("failed to setup vmxon region on host cpu : %d\n",hcpu->logical_cpu_id); 
+        pr_err("failed to setup vmxon region on host cpu : %d\n", 
+               hcpu->logical_cpu_id); 
+
         hcpu->logical_cpu_id = -1; 
         kfree(hcpu); 
         return NULL; 
     }
+
+    return hcpu; 
 }
 
 int kvx_setup_vmxon_region(struct host_cpu *hcpu)
@@ -151,7 +187,7 @@ int kvx_setup_io_bitmap(struct vcpu *vcpu)
         return -EINVAL;
 
     size_t total_bitmap_size = 2 * VMCS_IO_BITMAP_SIZE;
-    vcpu->io_bitmap = (uint32_t *)__get_free_pages(GFP_KERNEL, get_order(total_size));
+    vcpu->io_bitmap = (uint32_t *)__get_free_pages(GFP_KERNEL, get_order(total_bitmap_size));
     if(!vcpu->io_bitmap)
     {
         pr_err("Failed to allocate I/O bitmap memory\n"); 
@@ -170,14 +206,14 @@ int kvx_setup_io_bitmap(struct vcpu *vcpu)
     if(_vmwrite(VMCS_IO_BITMAP_A, vcpu->io_bitmap_pa) != 0)
     {
         PDEBUG("VMWrite VMCS_IO_BITMAP_A failed\n");
-        free_io_bitmap(vcpu->io_bitmap); 
+        kvx_free_io_bitmap(vcpu->io_bitmap); 
         return -EIO; 
     }
 
     if(_vmwrite(VMCS_IO_BITMAP_B, vcpu->io_bitmap_pa + VMCS_IO_BITMAP_SIZE) != 0)
     {
         PDEBUG("VMWrite VMCS_IO_BITMAP_B failed\n"); 
-        free_io_bitmap(vcpu->io_bitmap); 
+        kvx_free_io_bitmap(vcpu->io_bitmap); 
         return -EIO; 
     }
 
@@ -189,10 +225,10 @@ int kvx_setup_io_bitmap(struct vcpu *vcpu)
 
 }
 
-/*MSRs that case VM exit when accessed by guest */ 
+/*MSRs that cause VM exit when accessed by guest */ 
 int kvx_setup_msr_bitmap(struct vcpu *vcpu)
 {
-    vcpu->msr_bitmap = kmalloc(PAGE_SIZE | __GFP_ZERO); 
+    vcpu->msr_bitmap = (uint8_t *)__get_free_page(GFP_KERNEL | __GFP_ZERO);
     if(!vcpu->msr_bitmap)
     {
         pr_info("Failed to allocate MSR bitmap\n"); 
@@ -210,8 +246,11 @@ int kvx_setup_msr_bitmap(struct vcpu *vcpu)
 
 
     if(_vmwrite(VMCS_MSR_BITMAP, vcpu->msr_bitmap_pa) != 0){
-        free_msr_bitmap(vcpu); 
+        kvx_free_msr_bitmap(vcpu); 
+        return -EIO; 
     }
+
+    return 0; 
 }
 
 /*util round size up to full pagess and computer order */ 
@@ -283,7 +322,7 @@ int kvx_setup_msr_areas(struct vcpu *vcpu,
 
         /* VMCS count fields are 16-bit */
     if (vmexit_count > UINT16_MAX || vmentry_count > UINT16_MAX)
-        returm -EINVAL; 
+        return -EINVAL; 
 
     /*VM-exit MSR-store area (guest MSRs → memory on exit) */
     vcpu->vmexit_store_area = alloc_msr_entry(vmexit_count);
@@ -400,7 +439,7 @@ void kvx_free_all_msr_areas(struct vcpu *vcpu)
 static int kvx_vcpu_setup_msr_state(struct vcpu *vcpu)
 {
     uint64_t vmentry_values[KVX_MAX_MANAGED_MSRS] = {0};
-    int i; 
+    int i = 0; 
 
     vcpu->msr_indices[i++] = MSR_IA32_EFER;
     vcpu->msr_indices[i++] = MSR_IA32_STAR;
@@ -484,21 +523,21 @@ static int vmx_apply_exec_controls(struct vcpu *vcpu)
     allowed0 = (uint32_t)(msr & 0xFFFFFFFF); 
     allowed1 = (uint32_t)(msr >> 32);
     final = (controls->pinbased | allowed1) & (allowed0 | allowed1); 
-    CHECK_VMWRITE(VMCS_PROC_BASED_EXEC_CONTROLS, final); 
+    CHECK_VMWRITE(VMCS_PIN_BASED_EXEC_CONTROLS, final); 
 
     /*primary processor-based*/
     msr = __rdmsr1(MSR_IA32_VMX_PROCBASED_CTLS); 
     allowed0 = (uint32_t)(msr & 0xFFFFFFFF); 
     allowed1 = (uint32_t)(msr >> 32); 
     final = (controls->primary_proc | allowed1) & (allowed0 | allowed1); 
-    CHECK_VMWRITE(VMCS_PROC_BASED_EXEC_CONTROLS, final);
+    CHECK_VMWRITE(VMCS_PRIMARY_PROC_BASED_EXEC_CONTROLS, final);
 
     /*secondary processor-based */ 
     msr = __rdmsr1(MSR_IA32_VMX_PROCBASED_CTLS2); 
     allowed0 = (uint32_t)(msr & 0xFFFFFFFF); 
     allowed1 = (uint32_t)(msr >> 32); 
     final = (controls->secondary_proc | allowed1) & (allowed0 | allowed1); 
-    CHECK_VMWRITE(VMCS_PROC_BASED_EXEC_CONTROLS, final);
+    CHECK_VMWRITE(VMCS_SECONDARY_PROC_BASED_EXEC_CONTROLS, final);
 
     /*vm-entry contols */ 
     msr = __rdmsr1(MSR_IA32_VMX_ENTRY_CTLS); 
@@ -557,10 +596,10 @@ struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id)
     if(kvx_setup_exec_controls(vcpu) != 0)
     {
         pr_err("Failed to setup VMX execution controls\n"); 
-        kvx_free_all_msr_areas(vcpu); 
+I\        kvx_free_all_msr_areas(vcpu); 
         kvx_free_msr_bitmap(vcpu); 
-        kvx_free_io_bitmap(); 
-        kvx_free_vmcs_region(); 
+        kvx_free_io_bitmap(vcpu); 
+        kvx_free_vmcs_region(vcpu); 
         kfree(vcpu); 
         vcpu = NULL; 
         return NULL; 
@@ -570,7 +609,7 @@ struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id)
      /* Setup IO bitmap */
     if(kvx_vcpu_io_bitmap_enabled(vcpu))
     {
-        if (setup_io_bitmap(vcpu) != 0)
+        if (kvx_setup_io_bitmap(vcpu) != 0)
         {
             pr_err("Failed to setup I/O bitmap\n");
             kvx_free_vmcs_region(vcpu); 
@@ -625,7 +664,7 @@ void kvx_free_msr_bitmap(struct vcpu *vcpu)
 {
     if (vcpu->msr_bitmap) 
     {
-        kfree(vcpu->msr_bitmap);
+        free_page((unsigned long)vcpu->msr_bitmap);
         vcpu->msr_bitmap = NULL;
         vcpu->msr_bitmap_pa = 0;
     }
@@ -641,7 +680,7 @@ void kvx_free_vmcs_region(struct vcpu *vcpu)
     }
 }
 
-void free_vmxon_region(struct vcpu *vcpu)
+void free_vmxon_region(struct host_cpu *hcpu)
 {
     if (vcpu->vmxon) 
     {
@@ -657,10 +696,9 @@ void free_vcpu(struct vcpu *vcpu)
     if (!vcpu)
         return;
 
-    free_io_bitmap(vcpu);
-    free_msr_bitmap(vcpu);
-    free_vmcs_region(vcpu);
-    free_vmxon_region(vcpu);
+    kvx_free_io_bitmap(vcpu);
+    kvx_free_msr_bitmap(vcpu);
+    kvx_free_vmcs_region(vcpu);
 
     kfree(vcpu);
 }

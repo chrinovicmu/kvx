@@ -37,11 +37,11 @@
 #define MSR_IA32_VMX_EPT_VPID_CAP           0x0000048C //EPT & VPID capabilities 
 /*control field encodings  */  
 
-#define VMCS_PIN_BASED_EXEC_CONTROLS        0x00004000 
-#define VMCS_PROC_BASED_EXEC_CONTROLS       0x00004002
-#define VMCS_PROC_BASED_EXEC_CONTROLS_SEC   0x0000401E 
-#define VMCS_EXIT_CONTROLS                  0x0000400c
-#define VMCS_ENTRY_CONTROLS                 0x00004012 
+#define VMCS_PIN_BASED_EXEC_CONTROLS                0x00004000 
+#define VMCS_PRIMARY_PROC_BASED_EXEC_CONTROLS       0x00004002
+#define VMCS_SECONDARY_PROC_BASED_EXEC_CONTROLS               0x0000401E 
+#define VMCS_EXIT_CONTROLS                          0x0000400c
+#define VMCS_ENTRY_CONTROLS                         0x00004012 
 
 #define VM_EXIT_HOST_ADDR_SPACE_SIZE        0x00000200 
 #define VM_ENTRY_IA32E_MODE                 0x00000200 

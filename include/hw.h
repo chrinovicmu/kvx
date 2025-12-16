@@ -81,20 +81,12 @@ struct host_cpu
     struct vcpu **vcpus; 
 
     spinlock_t lock; 
-}; 
+};
 
-int kvx_vcpu_pin_to_cpu(struct vcpu *vcpu, int target_cpu_id); 
-/* Function declarations */
-int vmx_setup_vmxon_region(struct vcpu *vcpu);
-int vmx_setup_vmcs_region(struct vcpu *vcpu);
-int vmx_setup_io_bitmap(struct vcpu *vcpu); 
-int vmx_setup_msr_bitmap(struct vcpu *vcpu); 
-int vmx_setup_exec_controls(struct vcpu *vcpu); 
-
-void free_vmxon_region(struct vcpu *vcpu);
-void free_vmcs_region(struct vcpu *vcpu); 
-void free_io_btimap(struct vcpu *vcpu); 
-void free_msr_bitmap(struct vcpu *vcpu); 
-
+struct host_cpu *host_cpu_create(int logical_cpu_id, int max_vcpus);
+struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id);
+int kvx_vcpu_pin_to_cpu(struct vcpu *vcpu, int target_cpu_id);
+void kvx_vcpu_unpin_and_stop(struct vcpu *vcpu);
+void free_vcpu(struct vcpu *vcpu);
 
 #endif /* HW_H */
