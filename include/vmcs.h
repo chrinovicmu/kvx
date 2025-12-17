@@ -8,7 +8,7 @@
 
 #define X86_CR4_VMXE_BIT    13 
 #define X86_CR4_VMXE        _BITUL(X86_CR4_VMXE_BIT)
-
+#define MSR_IA32_VMX_MISC       0x00000485
 
 /*enablling vmx through IA32_FEATURE_CONTROL_MSR */ 
 #define IA32_FEATURE_CONTROL_LOCKED     (   1 << 0)
@@ -92,8 +92,6 @@
 #define VMCS_ENTRY_LOAD_IA32_EFER    (1u << 15) // Load guest IA32_EFER on VM-entry
 #define VMCS_ENTRY_LOAD_DEBUG         (1u << 2)  // Load debug controls on VM-entry
 
-
-
 // =======================
 // VM-Exit VMCS Controls
 // =======================
@@ -117,6 +115,22 @@
 #define VMCS_IO_BITMAP_PAGES_ORDER           1 
 #define VMCS_IO_BITMAP_SIZE                  (VMCS_IO_BITMAP_PAGE_SIZE << VMCS_IO_BITMAP_PAGES_ORDER)
 
+/* CR0 bits */
+#define X86_CR0_PE                          0x00000001 /* Protected Mode */
+#define X86_CR0_NE                          0x00000020 /* Numeric Error */
+#define X86_CR0_NW                          0x20000000 /* Not Write-through */
+#define X86_CR0_CD                          0x40000000 /* Cache Disable */
+#define X86_CR0_PG                          0x80000000 /* Paging */
+
+/* CR4 bits */
+#define X86_CR4_PSE                         0x00000010 /* Page Size Extensions */
+#define X86_CR4_PAE                         0x00000020 /* Physical Address Extension */
+#define X86_CR4_VMXE                        0x00002000 /* VMX Enable */ 
+
+#define GUEST_CR0                           0x00006800
+#define GUEST_CR3                           0x00006802
+#define GUEST_CR4                           0x00006804
+
 #define VMCS_CR0_GUEST_HOST_MASK            0x00006004
 #define VMCS_CR0_READ_SHADOW                0x00006006
 #define VMCS_CR4_GUEST_HOST_MASK            0x00006008
@@ -139,8 +153,16 @@
 
 #define IA32_SYSENTER_CS                    0x00000174
 
-/*memory regions */
- #endif 
+/* * CR3-Target Count (32-bit Control Field) 
+ */
+#define CR3_TARGET_COUNT                    0x0000400A
+
+/* * CR3-Target Values (Natural-Width Control Fields)  */
+#define CR3_TARGET_VALUE0                   0x00006008
+#define CR3_TARGET_VALUE1                   0x0000600A
+#define CR3_TARGET_VALUE2                   0x0000600C
+#define CR3_TARGET_VALUE3                   0x0000600E
+
 
 struct vmcs{
     u32 revision_id;

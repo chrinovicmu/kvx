@@ -225,8 +225,65 @@ static int kvx_setup_cr_controls(struct vcpu *vcpu)
     return 0; 
 }
 
+static uint32_t kvx_get_max_cr3_targets(void)
+{
+    uint64_t vmx_misc = __rdmsr1(MSR_IA32_VMX_MISC);
+    return (uint8_t)((vmx_misc >> 16) & 0x1FF); 
+}
+
+/**
+ * kvx_set_cr3_target_value - write a GPA into a specific hardware slot 
+ * @idx: the slot index (typically 0 to 3)
+ * @target_gpa : the guest physical address of the page table root 
+ */ 
+
+static int kvx_set_cr3_target_value(uint32_t idx, 
+                                    uint64_t target_gpa)
+{
+    if(idx >= kvx_get_max_cr3_targets())
+        return -EINVAL; 
+
+    switch(idx)
+    {
+        case 0:
+            CHECK_VMWRITE(CR3_TARGET_VALUE0, target_gpa); 
+            break;     
+        case 1:
+            CHECK_VMWRITE(CR3_TARGET_VALUE1, target_gpa); 
+            break; 
+        case 2:
+            CHECK_VMWRITE(CR3_TARGET_VALUE2, target_gpa); 
+            break; 
+        case 3:
+            CHECK_VMWRITE(CR3_TARGET_VALUE3, target_gpa); 
+            break;
+
+        default:
+            return -ENOTSUPP; 
+    }
+
+    return 0; 
+}
+
+static int kvx_set_cr3_target_count(uint32_t)
+{
+    CHECK_VMWRITE(CR3_TARGET_COUNT, (uint64_t)count); 
+    return 0; 
+}
+
+static int kvx_init_cr3_targets(void)
+{
+    if(kvx_set_cr3_target_count(0)) != 0)
+        return -1; 
+
+    for(int i = 0; i < 4; i++)
+        kvx_set_cr3_target_value(i, 0); 
+
+    return 0; 
+}
+
 /*which IO operation */ 
-int kvx_setup_io_bitmap(struct vcpu *vcpu)
+static int kvx_setup_io_bitmap(struct vcpu *vcpu)
 {
     if(!vcpu)
         return -EINVAL;
