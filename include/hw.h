@@ -30,29 +30,32 @@ struct vcpu {
 
     struct task_struct *host_struct; 
 
+    uint8_t host_stack; 
+    uint64_t host_rsp; 
+
     int vcpu_id;
     int host_cpu_id; 
 
     struct vmcs_region *vmcs;
-    u64 vmcs_pa;
+    uint64_t vmcs_pa;
 
     struct vmx_exec_ctrls controls; 
 
     void *msr_bitmap;
-    u64 msr_bitmap_pa; 
+    uint64_t msr_bitmap_pa; 
 
     uint8_t *io_bitmap;
-    u64 io_bitmap_pa;
+    uint64_t io_bitmap_pa;
 
     /*MSR managment */ 
     struct msr_entry *vmexit_store_area; 
-    u64 vmexit_store_pa;
+    uint64_t vmexit_store_pa;
 
     struct msr_entry *vmexit_load_area; 
-    u64 vmexit_load_pa; 
+    uint64_t vmexit_load_pa; 
 
     struct msr_entry *vmentry_load_area; 
-    u64 vmentry_load_pa;
+    uint64_t vmentry_load_pa;
 
     uint32_t msr_indices[KVX_MAX_MANAGED_MSRS]; 
     uint32_t msr_count; 
@@ -65,8 +68,14 @@ struct vcpu {
     unsigned long cr0, cr3, cr4, cr8;
     unsigned long efer;
 
-    u64 exit_reason;
-    u64 exit_qualification;
+    uint64_t gdtr_base; 
+    u16 gdtr_limit; 
+
+    uint64_t idtr_base; 
+    u16 idtr_limit; 
+
+    uint64_t exit_reason;
+    uint64_t exit_qualification;
 
     spinlock_t lock;
 };
@@ -75,7 +84,7 @@ struct host_cpu
 {
     int logical_cpu_id; 
     struct vmxon_region *vmxon; 
-    u64 vmxon_pa; 
+    uint64_t vmxon_pa; 
 
     int vpcu_count; 
     struct vcpu **vcpus; 

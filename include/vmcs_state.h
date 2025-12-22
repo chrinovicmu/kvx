@@ -91,6 +91,7 @@
 #define GUEST_INTR_STATUS				0x00000810
 #define GUEST_PML_INDEX					0x00000812
 
+#define HOST_STACK_ORDER                2 
 #define GUEST_STACK_SIZE                64 
 
 unsigned long guest_stack[GUEST_STACK_SIZE];

@@ -583,7 +583,7 @@ static void vmx_init_exec_controls(struct vcpu *vcpu)
         VMCS_PIN_POSTED_INTRS; 
     
     controls->primary_proc = 
-        VMCS_PROC_USE_IO_BITMAPS | 
+        VMCS_PROC_USE_MSR_BITMAPS | 
         VMCS_PROC_ACTIVATE_SECONDARY |
         VMCS_PROC_HLT_EXITING |
         VMCS_PROC_CR8_LOAD_EXITING | 
@@ -686,6 +686,18 @@ struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id)
     /* Initialize spinlock */
     spin_lock_init(&vcpu->lock);
 
+    /*alllocate vCPU stack */ 
+    vcpu->host_stack = (void *)__get_free_pages(
+        GFP_KERNEL | __GFP_ZERO, 
+        HOST_STACK_ORDER
+    ); 
+
+    /*point to top of host stack */ 
+    vcpu->host_rsp =
+        (uint64_t)vcpu->host_stack + (PAGE_SIZE << HOST_STACK_ORDER); 
+
+
+
     /* Allocate and setup VMCS region */
 
     if (kvx_setup_vmcs_region(vcpu) != 0) {
@@ -698,7 +710,7 @@ struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id)
     if(kvx_setup_exec_controls(vcpu) != 0)
     {
         pr_err("Failed to setup VMX execution controls\n"); 
-I\        kvx_free_all_msr_areas(vcpu); 
+        kvx_free_all_msr_areas(vcpu); 
         kvx_free_msr_bitmap(vcpu); 
         kvx_free_io_bitmap(vcpu); 
         kvx_free_vmcs_region(vcpu); 
@@ -804,3 +816,89 @@ void free_vcpu(struct vcpu *vcpu)
 
     kfree(vcpu);
 }
+
+void vmx_setup_host_state(struct vcpu *vcpu)
+{
+    u64 cr0 = _read_cr0();
+    u64 cr3 = _read_cr3();
+    u64 cr4 = _read_cr4();
+
+    CHECK_VMWRITE(HOST_CR0, cr0);
+    CHECK_VMWRITE(HOST_CR3, cr3);
+    CHECK_VMWRITE(HOST_CR4, cr4);
+
+    CHECK_VMWRITE(HOST_RSP, vcpu->host_rsp);
+    CHECK_VMWRITE(HOST_RIP, (uint64_t)kvx_vmexit_handler);
+
+    /* Segment selectors (must be valid) 
+     * masking with 0xF8 ensures bottom 3 bits (RPL and TI) are 0*/
+    CHECK_VMWRITE(HOST_CS_SELECTOR, __KERNEL_CS & 0xF8);
+    CHECK_VMWRITE(HOST_SS_SELECTOR, __KERNEL_DS & 0xF8);
+    CHECK_VMWRITE(HOST_DS_SELECTOR, __KERNEL_DS & 0xF8);
+    CHECK_VMWRITE(HOST_ES_SELECTOR, __KERNEL_DS & 0xF8);
+    CHECK_VMWRITE(HOST_FS_SELECTOR, 0);
+    CHECK_VMWRITE(HOST_GS_SELECTOR, 0);
+
+    /* FS/GS base */
+    CHECK_VMWRITE(HOST_FS_BASE, __rdmsr1(MSR_FS_BASE));
+    CHECK_VMWRITE(HOST_GS_BASE, __rdmsr1(MSR_GS_BASE));
+
+    /* Syscall MSRs */
+    CHECK_VMWRITE(HOST_SYSENTER_CS, __rdmsr1(MSR_IA32_SYSENTER_CS));
+    CHECK_VMWRITE(HOST_SYSENTER_ESP, __rdmsr1(MSR_IA32_SYSENTER_ESP));
+    CHECK_VMWRITE(HOST_SYSENTER_EIP, __rdmsr1(MSR_IA32_SYSENTER_EIP));
+
+    /* EFER must be set */
+    CHECK_VMWRITE(HOST_IA32_EFER, __rdmsr1(MSR_EFER));
+}
+
+void vmx_setup_guest_state(struct vcpu *vcpu)
+{
+    /* Control registers */
+    CHECK_VMWRITE(GUEST_CR0, vcpu->cr0);
+    CHECK_VMWRITE(GUEST_CR3, vcpu->cr3);
+    CHECK_VMWRITE(GUEST_CR4, vcpu->cr4);
+
+    /* RIP / RSP / RFLAGS */
+    CHECK_VMWRITE(GUEST_RIP, vcpu->regs.rip);
+    CHECK_VMWRITE(GUEST_RSP, vcpu->regs.rsp);
+    CHECK_VMWRITE(GUEST_RFLAGS, 0x2); /* reserved bit must be 1 */
+
+    /* Segment selectors (flat) */
+    CHECK_VMWRITE(GUEST_CS_SELECTOR, 0x8);
+    CHECK_VMWRITE(GUEST_DS_SELECTOR, 0x10);
+    CHECK_VMWRITE(GUEST_ES_SELECTOR, 0x10);
+    CHECK_VMWRITE(GUEST_SS_SELECTOR, 0x10);
+    CHECK_VMWRITE(GUEST_FS_SELECTOR, 0);
+    CHECK_VMWRITE(GUEST_GS_SELECTOR, 0);
+
+    /* Segment bases */
+    CHECK_VMWRITE(GUEST_CS_BASE, 0);
+    CHECK_VMWRITE(GUEST_DS_BASE, 0);
+    CHECK_VMWRITE(GUEST_ES_BASE, 0);
+    CHECK_VMWRITE(GUEST_SS_BASE, 0);
+    CHECK_VMWRITE(GUEST_FS_BASE, 0);
+    CHECK_VMWRITE(GUEST_GS_BASE, 0);
+
+    /* Segment limits */
+    CHECK_VMWRITE(GUEST_CS_LIMIT, 0xFFFFFFFF);
+    CHECK_VMWRITE(GUEST_DS_LIMIT, 0xFFFFFFFF);
+    CHECK_VMWRITE(GUEST_ES_LIMIT, 0xFFFFFFFF);
+    CHECK_VMWRITE(GUEST_SS_LIMIT, 0xFFFFFFFF);
+
+    /* Segment access rights (64-bit code/data) */
+    CHECK_VMWRITE(GUEST_CS_AR_BYTES, 0xA09B);
+    CHECK_VMWRITE(GUEST_DS_AR_BYTES, 0xC093);
+    CHECK_VMWRITE(GUEST_ES_AR_BYTES, 0xC093);
+    CHECK_VMWRITE(GUEST_SS_AR_BYTES, 0xC093);
+
+    /* GDTR / IDTR */
+    CHECK_VMWRITE(GUEST_GDTR_BASE, vcpu->gdtr_base);
+    CHECK_VMWRITE(GUEST_GDTR_LIMIT, vcpu->gdtr_limit);
+    CHECK_VMWRITE(GUEST_IDTR_BASE, vcpu->idtr_base);
+    CHECK_VMWRITE(GUEST_IDTR_LIMIT, vcpu->idtr_limit);
+
+    /* MSRs */
+    CHECK_VMWRITE(GUEST_IA32_EFER, vcpu->efer);
+}
+

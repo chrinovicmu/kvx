@@ -1,5 +1,6 @@
 #pragma once 
 
+#include "hw.h"
 #include <stdint.h>
 #define VM_EXIT_REASON                              0x00004402
 
@@ -71,53 +72,103 @@ void emulate_cr_access(struct vcpu *vcpu);
 void emulate_msr_access(struct vcpu *vcpu);
 void handle_ept_violation(struct vcpu *vcpu);
 
-void vmx_vmexit_handler(struct vcpu *vcpu)
+__attribute__((naked)) void kvx_vmexit_handler(void)
 {
-    if (!vcpu)
-        return;
+    __asm__ volatile(
+        /*save all GPRs to the host stack */ 
+        "push %%rax\n"
+        "push %%rbx\n"
+        "push %%rcx\n"
+        "push %%rdx\n"
+        "push %%rsi\n"
+        "push %%rdi\n"
+        "push %%rbp\n"
+        "push %%r8\n"
+        "push %%r9\n"
+        "push %%r10\n"
+        "push %%r11\n"
+        "push %%r12\n"
+        "push %%r13\n"
+        "push %%r14\n"
+        "push %%r15\n"
 
-    uint64_t exit_reason = 0;
+        /*rsp points to our saved register context 
+        * pass register pointer as first arg to handle_vmexit 
+        */ 
+        "mov %%rsp, %%rdi\n"
+        "call handle_vmexit\n"
 
-    /* Read the exit reason from the VMCS */
-    if (_vmread(VM_EXIT_REASON, &exit_reason) != 0) {
-        pr_err("VMCS read failed\n");
-        return;
-    }
+        /*check return values */ 
+        "test %%eax, %%eax\n"
+        "jnz vmexit_failed"
 
-    switch (exit_reason) {
-    case EXIT_REASON_CPUID:
-        emulate_cpuid(vcpu);
-        break;
+        /*resotre register after handler returns */ 
+       "pop %%r15\n"
+        "pop %%r14\n"
+        "pop %%r13\n"
+        "pop %%r12\n"
+        "pop %%r11\n"
+        "pop %%r10\n"
+        "pop %%r9\n"
+        "pop %%r8\n"
+        "pop %%rbp\n"
+        "pop %%rdi\n"
+        "pop %%rsi\n"
+        "pop %%rdx\n"
+        "pop %%rcx\n"
+        "pop %%rbx\n"
+        "pop %%rax\n"
 
-    case EXIT_REASON_HLT:
-        emulate_hlt(vcpu);
-        break;
+        "vmresume\n"
+        "jmp vmresume_failed\n"
 
-    case EXIT_REASON_INVLPG:
-        emulate_invlpg(vcpu);
-        break;
-
-    case EXIT_REASON_CR_ACCESS:
-        emulate_cr_access(vcpu);
-        break;
-
-    case EXIT_REASON_MSR_READ:
-    case EXIT_REASON_MSR_WRITE:
-        emulate_msr_access(vcpu);
-        break;
-
-    case EXIT_REASON_EPT_VIOLATION:
-        handle_ept_violation(vcpu);
-        break;
-
-    default:
-        pr_err("Unexpected VM exit reason: %llu\n", exit_reason);
-        /* Optional: terminate guest or log */
-        break;
-    }
-
-    /* Resume guest execution */
-    if (_vmresume() != 0) {
-        pr_err("VMRESUME failed\n");
-    }
+        "vmexit_failed:\n"
+        "jmp vmresume_failed\n"
+        ::: "memory"
+    ); 
 }
+
+static int handle_vmexit(struct guest_regs regs)
+{
+    uint64_t exit_reason; 
+    uint64_t exit_qualification;
+
+    CHECK_VMREAD(VM_EXIT_REASON, exit_reason); 
+    CHECK_VMREAD(VM_EXIT_QUALIFICAION, exit_qualification); 
+
+    switch(exit_reason & 0xFFFF)
+    {
+        
+        case EXIT_REASON_CPUID:
+            emulate_cpuid(vcpu);
+             break;
+
+        case EXIT_REASON_HLT:
+            emulate_hlt(vcpu);
+            break;
+
+        case EXIT_REASON_INVLPG:
+            emulate_invlpg(vcpu);
+            break;
+
+        case EXIT_REASON_CR_ACCESS:
+            emulate_cr_access(vcpu);
+            break;
+
+        case EXIT_REASON_MSR_READ:
+        case EXIT_REASON_MSR_WRITE:
+            emulate_msr_access(vcpu);
+            break;
+
+        case EXIT_REASON_EPT_VIOLATION:
+            handle_ept_violation(vcpu);
+            break;
+
+        default:
+            pr_err("Unexpected VM exit reason: %llu\n", exit_reason);
+            /* Optional: terminate guest or log */
+            break;
+    }
+
+}
+
