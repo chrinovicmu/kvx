@@ -23,20 +23,34 @@ struct guest_regs {
     unsigned long cs, ds, es, fs, gs, ss;
 };
 
+enum vcpu_state {
+    VCPU_STATE_UNINITIALIZED, 
+    VCPU_STATE_RUNNABLE, 
+    VCPU_STATE_RUNNNING, 
+    VCPU_STATE_HALTED, 
+    VCPU_STATE_BLOCKED, 
+    VCPU_STATE_SHUTDOWN, 
+    VCPU_STATE_ERROR
+}; 
+
 /* Virtual CPU structure */
 struct vcpu {
 
     struct kvx_vm *vm;
+    int vcpu_id;
+    int host_cpu_id; 
+
+    enum vcpu_state state; 
+    bool halted;
+    spinlock_t lock; 
+    wait_queue_head_t wq; 
 
     struct task_struct *host_struct; 
 
     uint8_t host_stack; 
     uint64_t host_rsp; 
 
-    int vcpu_id;
-    int host_cpu_id; 
-
-    struct vmcs_region *vmcs;
+     struct vmcs_region *vmcs;
     uint64_t vmcs_pa;
 
     struct vmx_exec_ctrls controls; 
@@ -77,7 +91,6 @@ struct vcpu {
     uint64_t exit_reason;
     uint64_t exit_qualification;
 
-    spinlock_t lock;
 };
 
 struct host_cpu

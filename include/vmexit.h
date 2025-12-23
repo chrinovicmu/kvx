@@ -169,6 +169,6 @@ static int handle_vmexit(struct guest_regs regs)
             /* Optional: terminate guest or log */
             break;
     }
-
 }
+
 
