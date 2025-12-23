@@ -1,4 +1,3 @@
-#include <cerrno>
 #include <linux/slab.h>
 #include <linux/gfp.h>
 #include <linux/mm.h>
@@ -219,8 +218,8 @@ static int kvx_setup_cr_controls(struct vcpu *vcpu)
     CHECK_VMWRITE(CR0_READ_SHADOW, vcpu->cr0); 
     CHECK_VMWRITE(CR4_READ_SHADOW, vcpu->cr4 & ~X86_CR4_VMXE); 
 
-    CHECK_VMWRITE(CR0_MASK_HOST_MASK, cr0_mask); 
-    CHECK_VMWRITE(CR4_MASK_HOST_MASK, cr4_mask); 
+    CHECK_VMWRITE(CR0_GUEST_HOST_MASK, cr0_mask); 
+    CHECK_VMWRITE(CR4_GUEST_HOST_MASK, cr4_mask); 
 
     return 0; 
 }
@@ -411,6 +410,7 @@ static void populate_msr_store_area(struct msr_entry *area, size_t count,
     }
 
 }
+
 int kvx_setup_msr_areas(struct vcpu *vcpu,
                     const uint32_t *vmexit_list,  size_t vmexit_count,
                     const uint32_t *vmentry_list, const uint32_t *vmentry_values,
@@ -696,8 +696,6 @@ struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id)
     vcpu->host_rsp =
         (uint64_t)vcpu->host_stack + (PAGE_SIZE << HOST_STACK_ORDER); 
 
-
-
     /* Allocate and setup VMCS region */
 
     if (kvx_setup_vmcs_region(vcpu) != 0) {
@@ -817,7 +815,7 @@ void free_vcpu(struct vcpu *vcpu)
     kfree(vcpu);
 }
 
-void vmx_setup_host_state(struct vcpu *vcpu)
+void kvx_setup_host_state(struct vcpu *vcpu)
 {
     u64 cr0 = _read_cr0();
     u64 cr3 = _read_cr3();
@@ -827,6 +825,7 @@ void vmx_setup_host_state(struct vcpu *vcpu)
     CHECK_VMWRITE(HOST_CR3, cr3);
     CHECK_VMWRITE(HOST_CR4, cr4);
 
+    extern kvx_vmexit_handler; 
     CHECK_VMWRITE(HOST_RSP, vcpu->host_rsp);
     CHECK_VMWRITE(HOST_RIP, (uint64_t)kvx_vmexit_handler);
 
@@ -852,7 +851,7 @@ void vmx_setup_host_state(struct vcpu *vcpu)
     CHECK_VMWRITE(HOST_IA32_EFER, __rdmsr1(MSR_EFER));
 }
 
-void vmx_setup_guest_state(struct vcpu *vcpu)
+void kvx_setup_guest_state(struct vcpu *vcpu)
 {
     /* Control registers */
     CHECK_VMWRITE(GUEST_CR0, vcpu->cr0);
@@ -902,3 +901,93 @@ void vmx_setup_guest_state(struct vcpu *vcpu)
     CHECK_VMWRITE(GUEST_IA32_EFER, vcpu->efer);
 }
 
+void kvx_dump_vcpu(struct vcpu *vcpu)
+{
+    pr_info("\n*** Guest State ***\n\n");     
+
+    pr_info("CR0: actual=0x%llx, shadow=0x%llx, mask=0x%llx\n", 
+            __vmread(GUEST_CR0),
+            __vmread(CR0_READ_SHADOW), 
+            __vmread(CR0_GUEST_HOST_MASK)); 
+
+    pr_info("CR4: actual=0x%llx, shadow=0x%llx, mask=0x%llx\n", 
+            __vmread(GUEST_CR4), 
+            __vmread(CR4_READ_SHADOW), 
+            __vmread(CR4_GUEST_HOST_MASK)); 
+
+    pr_info("CR3: 0x%llx\n", __vmread(GUEST_CR3));
+
+    if((vcpu->controls.secondary_proc & VMCS_PROC2_ENABLE_EPT) &&
+       (__vmread(GUEST_CR4) & X86_CR4_PAE) && 
+        !(vcpu->controls.vm_entry & VM_ENTRY_IA32E_MODE))
+    {
+        pr_info("PDPTE0 = 0x%llx PDPTE1 = 0x%llx\n", 
+                __vmread(GUEST_PDPTE(0)), __vmread(GUEST_PDPTE(1))); 
+        pr_info("PDPTE2 = 0x%llx PDPTE3 = 0x%llx\n", 
+                __vmread(GUEST_PDPTE(2)), __vmread(GUEST_PDPTE(3))); 
+    }
+
+    pr_info("RSP = 0x%llx (0x%llx) RIP = 0x%llx (0x%llx)\n", 
+            __vmread(GUEST_RSP), vcpu->regs.rsp, 
+            __vmread(GUEST_RIP), vcpu->regs.rip); 
+
+    pr_info("RFLAGS=0x%llx (0x%llx) DR7 = 0x%llx\n", 
+            __vmread(GUEST_RFLAGS), vcpu->regs.rflags, 
+            __vmread(GUEST_DR7)); 
+
+    pr_info("Sysenter RSP=0x%llx CS:RIP=0x%04:0x%llx\n", 
+           (uint32_t)(__vmread(GUEST_SYSENTER_ESP) & 0xFFFFFFFF), 
+           (uint32_t) __vmread(GUEST_SYSENTER_CS), 
+            (uint32_t)(__vmread(GUEST_SYSENTER_EIP) & 0xFFFFFFFF)); 
+    
+    
+    pr_info("\n*** Host State ***\n\n");
+
+    pr_info("RIP = 0x%016llx (%ps)  RSP = 0x%016llx\n",
+        __vmread(HOST_RIP),
+        (void *)__vmread(HOST_RIP),
+        __vmread(HOST_RSP));
+
+    pr_info("CS=%04x SS=%04x DS=%04x ES=%04x FS=%04x GS=%04x TR=%04x\n",
+        (u16)__vmread(HOST_CS_SELECTOR),
+        (u16)__vmread(HOST_SS_SELECTOR),
+        (u16)__vmread(HOST_DS_SELECTOR),
+        (u16)__vmread(HOST_ES_SELECTOR),
+        (u16)__vmread(HOST_FS_SELECTOR),
+        (u16)__vmread(HOST_GS_SELECTOR),
+        (u16)__vmread(HOST_TR_SELECTOR));
+
+    pr_info("FSBase=0x%016llx GSBase=0x%016llx TRBase=0x%016llx\n",
+        __vmread(HOST_FS_BASE),
+        __vmread(HOST_GS_BASE),
+        __vmread(HOST_TR_BASE));
+
+    pr_info("GDTBase=0x%016llx IDTBase=0x%016llx\n",
+        __vmread(HOST_GDTR_BASE),
+        __vmread(HOST_IDTR_BASE));
+
+    pr_info("CR0=0x%016llx CR3=0x%016llx CR4=0x%016llx\n",
+        __vmread(HOST_CR0),
+        __vmread(HOST_CR3),
+        __vmread(HOST_CR4));
+
+    pr_info("Sysenter ESP=0x%08x CS:EIP=%04x:0x%08x\n",
+        (u32)__vmread(HOST_SYSENTER_ESP),
+        (u32)__vmread(HOST_SYSENTER_CS),
+        (u32)__vmread(HOST_SYSENTER_EIP));
+
+    /* Optional fields depending on VM-exit controls */
+    if (__vmread(VM_EXIT_CONTROLS) &
+        (VM_EXIT_LOAD_HOST_EFER | VM_EXIT_LOAD_HOST_PAT)) {
+        pr_info("EFER=0x%016llx PAT=0x%016llx\n",
+            __vmread(HOST_EFER),
+            __vmread(HOST_PAT));
+    }
+
+    if (__vmread(VM_EXIT_CONTROLS) &
+        VM_EXIT_LOAD_PERF_GLOBAL_CTRL){
+        pr_info("PerfGlobalCtrl=0x%016llx\n",
+            __vmread(HOST_PERF_GLOBAL_CTRL));
+    }
+
+}

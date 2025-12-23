@@ -131,10 +131,10 @@
 #define GUEST_CR3                           0x00006802
 #define GUEST_CR4                           0x00006804
 
-#define VMCS_CR0_GUEST_HOST_MASK            0x00006004
-#define VMCS_CR0_READ_SHADOW                0x00006006
-#define VMCS_CR4_GUEST_HOST_MASK            0x00006008
-#define VMCS_CR4_READ_SHADOW                0x0000600A
+#define CR0_GUEST_HOST_MASK            0x00006004
+#define CR0_READ_SHADOW                0x00006006
+#define CR4_GUEST_HOST_MASK            0x00006008
+#define CR4_READ_SHADOW                0x0000600A
 
 /* VMCS field encodings for CR3 targets */ 
 
@@ -179,7 +179,7 @@ struct vmxon_region{
 struct vmx_exec_ctrls{
     uint32_t pin_based;
     uint32_t primary_proc;
-    uint32_t secondary_prc; 
+    uint32_t secondary_proc; 
     uint32_t vm_entry; 
     uint32_t vm_exit; 
 };

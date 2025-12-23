@@ -21,7 +21,6 @@
 #include <asm/page.h>
 #include <asm/io.h>
 #include <asm/errno.h> 
-#include <stdint.h>
 #include "vmx.h"
 #include "asm/page_types.h"
 #include "linux/gfp_types.h"

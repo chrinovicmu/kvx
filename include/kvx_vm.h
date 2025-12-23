@@ -1,14 +1,14 @@
-#include <stdint.h>
-#include <string.h>
 #ifnde VM_H
 #define VM_H
+
+#define KVX_MAX_VPCUS 1
 
 #include "hw.h"
 
 /*represents a single virtual machine */ 
 
 enum vm_state {
-    VM_CREATES, 
+    VM_CREATED, 
     VM_RUNNING, 
     VM_SUSPENDED, 
     VM_STOPPED
@@ -31,7 +31,7 @@ struct kvx_vm
     spinlock_t lock; 
 }; 
 
-struct kvx_vm * create_vm(int vm_id, const char *name, u64 ram_size, int max_vcpus)
+struct kvx_vm * kvx_create_vm(int vm_id, const char *name, u64 ram_size, int max_vcpus)
 {
     struct kvx_vm *vm;
 
@@ -48,7 +48,6 @@ struct kvx_vm * create_vm(int vm_id, const char *name, u64 ram_size, int max_vcp
         kfree(vm);
         return NULL; 
     }
-
 
     vm->vcpus = kzalloc(sizeof(struct vcpu *) *max_vcpus, GFP_KERNEL); 
     if(!vm->vcpus)

@@ -32,7 +32,7 @@
 #define CHECK_VMREAD(field_enc, out_var)                                   \
     do {                                                                   \
         uint64_t __value;                                                  \
-        if (_vmread((field_enc), &__value)) {                              \
+        if (_vmread_safe((field_enc), &__value)) {                              \
             printk(KERN_ERR "VMRead failed: field_encoding: 0x%lx\n",     \
                    (unsigned long)(field_enc));                            \
             return -EIO;                                                   \

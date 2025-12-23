@@ -83,6 +83,8 @@
 #define GUEST_SYSENTER_ESP				0x00006824
 #define GUEST_SYSENTER_EIP				0x00006826
 
+#define GUEST_PDPTE0                    0X0000280a 
+#define GUEST_PDPTE(n)  (GUEST_PDPTE0 + (n) * 2)
 /*guest non-register state */ 
 
 #define GUEST_ACTIVITY_STATE			0X00004826

@@ -1,6 +1,7 @@
 #ifndef VM_OPS_H 
 #define VM_OPS_H
 
+#include <stdint.h>
 asmlinkage void ex_handler_rdmsr_unsafe(void); 
 asmlinkage void ex_handler_rdmsr_unsafe(void)
 {
@@ -115,7 +116,7 @@ static inline int _vmptrld(uint64_t vmcs_phys_addr)
     return ret; 
 }
 
-static inline int _vmread(uint64_t field_enc, uint64_t *value)
+static inline int _vmread_safe(uint64_t field_enc, uint64_t *value)
 {
     uint8_t ret; 
     uint64_t val; 
@@ -132,6 +133,11 @@ static inline int _vmread(uint64_t field_enc, uint64_t *value)
     return ret ? 1 : 0;
 }
 
+static inline unsigned long __vmread(uint64_t field_enc)
+{
+    uint64_t val; 
+    return _vmread_safe(field_enc, &val) ? 0 : val; 
+}
 static inline int _vmwrite(uint64_t field_enc, uint64_t value)
 {
     uint8_t status; 
