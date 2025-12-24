@@ -25,7 +25,7 @@ struct guest_regs {
 
 enum vcpu_state {
     VCPU_STATE_UNINITIALIZED, 
-    VCPU_STATE_RUNNABLE, 
+    VCPU_STATE_INITIALIZED, 
     VCPU_STATE_RUNNNING, 
     VCPU_STATE_HALTED, 
     VCPU_STATE_BLOCKED, 
@@ -110,5 +110,6 @@ struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id);
 int kvx_vcpu_pin_to_cpu(struct vcpu *vcpu, int target_cpu_id);
 void kvx_vcpu_unpin_and_stop(struct vcpu *vcpu);
 void free_vcpu(struct vcpu *vcpu);
+int kvx_init_vmcs_state(struct vcpu *vcpu); 
 
 #endif /* HW_H */

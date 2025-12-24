@@ -31,36 +31,7 @@ struct kvx_vm
     spinlock_t lock; 
 }; 
 
-struct kvx_vm * kvx_create_vm(int vm_id, const char *name, u64 ram_size, int max_vcpus)
-{
-    struct kvx_vm *vm;
-
-    vm = kzalloc(sizeof(*vm), GFP_KERNEL);
-    if(!vm)
-        return NULL; 
-
-    vm->vm_id = vm_id; 
-    strncpy(vm->name, name, sizeof(vm->name)- 1); 
-
-    vm->guest_ram_base = kzalloc(ram_size, GFP_KERNEL); 
-    if(!vm->guest_ram_base)
-    {
-        kfree(vm);
-        return NULL; 
-    }
-
-    vm->vcpus = kzalloc(sizeof(struct vcpu *) *max_vcpus, GFP_KERNEL); 
-    if(!vm->vcpus)
-    {
-        kfree(vm->guest_ram_base);
-        kfree(vm);
-        return NULL; 
-    }
-
-    spin_lock_init(&vm->lock); 
-
-    return vm; 
-
-}
-
+struct kvx_vm * kvx_create_vm(int vm_id, const char *name, u64 ram_size, int max_vcpus); 
+int kvx_vm_add_vcpu(struct kvx_vm *vm, int vcpu_id, struct host_cpu); 
+void kvx_vmentry(struct vcpu *vcpu); 
 #endif 

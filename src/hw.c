@@ -164,13 +164,7 @@ int kvx_setup_vmcs_region(struct vcpu *vcpu)
         return -ENOMEM; 
 
     *(uint32_t *)vcpu->vmcs = _vmcs_revision_id();
-    vcpu->vmcs_pa = virt_to_phys(vcpu->vmcs); 
-
-    if(_vmptrld(vcpu->vmcs_pa) != 0)
-    {
-        pr_err("VMCS load (_vmptrld) failed\n"); 
-        return -EFAULT; 
-    }
+    vcpu->vmcs_pa = virt_to_phys(vcpu->vmcs);
 
     pr_info("VMCS region alllocated, revision ID set, and loaded\n"); 
     return 0;
@@ -670,6 +664,9 @@ int kvx_setup_exec_controls(struct vcpu *vcpu)
 
 struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id)
 {
+    if(!kvx_vm || vcpu_id >= vm->max_vcpus)
+        return -EINVAL; 
+
     struct vcpu *vcpu;
     int ret; 
 
@@ -760,6 +757,9 @@ _out_free_vcpu:
 
 void kvx_free_io_bitmap(struct vcpu *vcpu)
 {
+    if(!vcpu)
+        return -EINVAL; 
+
     if (vcpu->io_bitmap) 
     {
         free_pages((unsigned long)vcpu->io_bitmap, VMCS_IO_BITMAP_PAGES_ORDER);
@@ -770,6 +770,9 @@ void kvx_free_io_bitmap(struct vcpu *vcpu)
 
 void kvx_free_msr_bitmap(struct vcpu *vcpu)
 {
+    if(!vcpu)
+        return -EINVAL; 
+
     if (vcpu->msr_bitmap) 
     {
         free_page((unsigned long)vcpu->msr_bitmap);
@@ -811,8 +814,11 @@ void free_vcpu(struct vcpu *vcpu)
     kfree(vcpu);
 }
 
-void kvx_setup_host_state(struct vcpu *vcpu)
+static int kvx_setup_host_state(struct vcpu *vcpu)
 {
+    if(!vcpu)
+        return -EINVAL; 
+
     u64 cr0 = _read_cr0();
     u64 cr3 = _read_cr3();
     u64 cr4 = _read_cr4();
@@ -845,10 +851,15 @@ void kvx_setup_host_state(struct vcpu *vcpu)
 
     /* EFER must be set */
     CHECK_VMWRITE(HOST_IA32_EFER, __rdmsr1(MSR_EFER));
+
+    return 0; 
 }
 
-void kvx_setup_guest_state(struct vcpu *vcpu)
+static int kvx_setup_guest_state(struct vcpu *vcpu)
 {
+    if(!vcpu)
+        return -EINVAL; 
+
     /* Control registers */
     CHECK_VMWRITE(GUEST_CR0, vcpu->cr0);
     CHECK_VMWRITE(GUEST_CR3, vcpu->cr3);
@@ -895,6 +906,30 @@ void kvx_setup_guest_state(struct vcpu *vcpu)
 
     /* MSRs */
     CHECK_VMWRITE(GUEST_IA32_EFER, vcpu->efer);
+
+    return 0; 
+}
+
+int kvx_init_vmcs_state(struct vcpu *vcpu)
+{
+    if(!vcpu)
+        return -EINVAL; 
+
+    int ret;
+
+    if(ret = kvx_setup_host_state(vcpu) != 0)
+    {
+        pr_err("Host state setup faile : err %d\n", ret); 
+        return -1; 
+    }
+    if(ret = kvx_setup_guest_state(vcpu) != 0)
+    {
+        pr_err("Guest state setup failed : err %d\n", ret); 
+        return -1; 
+    }
+
+    return 0; 
+
 }
 
 void kvx_dump_vcpu(struct vcpu *vcpu)
