@@ -11,6 +11,7 @@
 
 .globl kvx_vmentry_asm 
 .globl kvx_vmexit_handler 
+.extern handle_vmexit
 
 # streucture offsets (match struct guest_regs layout)
 .set VCPU_R15, 0 
@@ -100,10 +101,9 @@ kvx_vmexit_handler:
     push %r14
     push %r15 
 
+    mov %rsp, %rdi
     # align stack to 16 bytes for C ABI
     sub $8, %rsp 
-
-    lea 8(%rsp), %rdi
     call handle_vmexit
 
     #cleanup alignment 

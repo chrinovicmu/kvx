@@ -43,6 +43,7 @@ struct kvx_vm * kvx_create_vm(int vm_id, const char *vm_name,
                               uint64_t ram_size)
 {
     struct kvx_vm *vm;
+    struct vcpu *vcpu; 
 
     vm = kzalloc(sizeof(kvx_vm), GFP_KERNEL); 
     if(!vm)
@@ -72,7 +73,6 @@ struct kvx_vm * kvx_create_vm(int vm_id, const char *vm_name,
         kfree(vm); 
         return NULL; 
     }
-
     memset(vm->guest_ram_base, 0, vm->guest_ram_size); 
 
     vm->vcpus = kcalloc(vm->max_vcpus, sizeof(struct vcpu*), GFP_KERNEL); 
@@ -160,7 +160,8 @@ int kvx_vm_add_vcpu(struct kvx_vm *vm, int vcpu_id, struct host_cpu *hcpu)
     vm->vcpus[vcpu_id] = vcpu; 
     vcpu->target_cpu_id = hcpu->logical_cpu_id; 
 
-    vcpu->regs.rsp = vm->guest_rsp; 
+    /*set stack pointer to top of VM RAM */
+    vcpu->regs.rsp = vm->guest_ram_size; 
 
     vcpu->state = VCPU_STATE_INITIALIZED; 
     vm->online_vpcus++; 
@@ -173,28 +174,7 @@ _unlock_vm:
     return ret; 
 }
 
-int kvx_run_vm(struct kvx_vm *vm, int vcpu_id)
-{
-    struct vcpu *vcpu; 
-
-    if(vcpu_id >= vm->max_vcpus || vm->vcpus[vcpu_id] == NULL)
-        return -EINVAL; 
-
-    vcpu = vm->vcpus[vcpu_id]; 
-    vcpu->launched = 1; 
-
-    /*spawn kthread to run the exexution loop */ 
-    vcpu->host_task = kthread(kvx_vcpu_loop, vcpu, "kvx_vm%d_vcpu%d", vm->vm_id, vcpu_id); 
-    if(IS_ERR(vcpu->host_task))
-    {
-        pr_err("KVX: Failed to spawn kthread for VCPU %d\n", vcpu_id);
-        return PTR_ERR(vcpu->host_task); 
-    }
-
-    return 0;
-}
-
-int kvx_vcpu_loop(void *data)
+static int kvx_vcpu_loop(void *data)
 {
     struct vcpu *vcpu = (struct vcpu*)data; 
 
@@ -236,6 +216,25 @@ int kvx_vcpu_loop(void *data)
     return 0; 
 }
 
+int kvx_run_vm(struct kvx_vm *vm, int vcpu_id)
+{
+    struct vcpu *vcpu; 
 
+    if(vcpu_id >= vm->max_vcpus || vm->vcpus[vcpu_id] == NULL)
+        return -EINVAL; 
+
+    vcpu = vm->vcpus[vcpu_id]; 
+    vcpu->launched = 1; 
+
+    /*spawn kthread to run the exexution loop */ 
+    vcpu->host_task = kthread(kvx_vcpu_loop, vcpu, "kvx_vm%d_vcpu%d", vm->vm_id, vcpu_id); 
+    if(IS_ERR(vcpu->host_task))
+    {
+        pr_err("KVX: Failed to spawn kthread for VCPU %d\n", vcpu_id);
+        return PTR_ERR(vcpu->host_task); 
+    }
+
+    return 0;
+}
 
 

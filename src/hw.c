@@ -681,6 +681,10 @@ struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id)
     vcpu->state = VCPU_STATE_UNINITIALIZED; 
     vcpu->halted = false; 
 
+    /*default architectural state */ 
+    vcpu->regs.rflags = 0x2; 
+    vcpu->regs.rip = 0x0; 
+
 
     /* Initialize spinlock */
     spin_lock_init(&vcpu->lock);
