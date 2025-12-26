@@ -281,7 +281,8 @@ static int kvx_setup_io_bitmap(struct vcpu *vcpu)
         return -EINVAL;
 
     size_t total_bitmap_size = 2 * VMCS_IO_BITMAP_SIZE;
-    vcpu->io_bitmap = (uint32_t *)__get_free_pages(GFP_KERNEL, get_order(total_bitmap_size));
+    vcpu->io_bitmap = (uint32_t *)__get_free_pages(GFP_KERNEL,
+                                                   get_order(total_bitmap_size));
     if(!vcpu->io_bitmap)
     {
         pr_err("Failed to allocate I/O bitmap memory\n"); 
@@ -319,8 +320,38 @@ static int kvx_setup_io_bitmap(struct vcpu *vcpu)
 
 }
 
+static int kvx_update_exception_bitmap(struct vcpu *vcpu)
+{
+    CHECK_VMWRITE(VMCS_EXCEPTION_BITMAP, (vcpu->exception_bitmap & 0xFFFFFFFF)); 
+    return 0; 
+}
+
+static int kvx_set_exception_intercept(struct vcpu *vcpu, int vector)
+{
+    int ret;
+    if(vector >= 32)
+        ret = -EINVAL; 
+
+    vcpu->exception_bitmap |= (1U << vector); 
+    ret = kvx_update_exception_bitmap(vcpu); 
+
+    return ret; 
+}
+
+static int kvx_clear_exception_intercept(struct vcpu, int vector) 
+{
+    int ret;
+    if(vector >= 32)
+        ret = -EINVAL;
+
+    vcpu->exception_bitmap &= ~(1U << vector); 
+    ret = kvx_update_exception_bitmap(vcpu); 
+
+    return ret;  
+}
+
 /*MSRs that cause VM exit when accessed by guest */ 
-int kvx_setup_msr_bitmap(struct vcpu *vcpu)
+static int kvx_setup_msr_bitmap(struct vcpu *vcpu)
 {
     vcpu->msr_bitmap = (uint8_t *)__get_free_page(GFP_KERNEL | __GFP_ZERO);
     if(!vcpu->msr_bitmap)
@@ -724,7 +755,12 @@ struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id)
             goto _out_free_msr_areas; 
         }
     }
-    
+
+    /* we catch #UD (6) to prevent guest crashes on unsupported instructions.
+     * we catch #PF (14) if we are using Shadow Paging or debugging memory.
+     */
+    vcpu->exception_bitmap = (1U << 6) | (1U << 14); 
+
     /* Setup MSR bitmap */
     if(kvx_vcpu_msr_bitmap_enabled(vcpu))
     {

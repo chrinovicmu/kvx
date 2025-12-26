@@ -37,13 +37,9 @@ kvx_vmentry_asm:
 
     mov %rsi, %r10 
 
-    #save host calle-Saved registers onto host stack
-    #save pointer to regs struct
     push %rbp
     push %rdi
 
-    # load Guest GPRs from VCPU struct
-    # We leave RAX for last as we need it for the base address
     mov VCPU_RAX(%rdi), %rax 
     mov VCPU_RBX(%rdi), %rbx
     mov VCPU_RCX(%rdi), %rcx
@@ -64,7 +60,6 @@ kvx_vmentry_asm:
     test %r10, %r10 
     mov VCPU_R10(%rdi), %r10 
 
-    #load rdi last(it was a pointer, now it beceomes guest value)
     mov VCPU_RDI(%rdi), %rdi 
 
     jnz do_resume

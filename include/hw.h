@@ -63,6 +63,8 @@ struct vcpu {
     uint8_t *io_bitmap;
     uint64_t io_bitmap_pa;
 
+    uint32_t exception_bitmap; 
+
     /*MSR managment */ 
     struct msr_entry *vmexit_store_area; 
     uint64_t vmexit_store_pa;
