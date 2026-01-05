@@ -146,11 +146,12 @@
 /*for storing MSRs on vm exit */
 
 #define MSR_AREA_ENTRIES                    1 
-#define VM_EXIT_MSR_STORE_COUNT             0x00002004 
-#define VM_EXIT_MSR_STORE_ADDR              0x00002006
-#define VM_ENTRY_MSR_LOAD_COUNT             0x00002008 
-#define VM_ENTRY_MSR_LOAD_ADDR              0x0000200A
-
+#define VM_EXIT_MSR_STORE_ADDR  0x00002006
+#define VM_EXIT_MSR_STORE_COUNT 0x00002007
+#define VM_EXIT_MSR_LOAD_ADDR   0x00002008
+#define VM_EXIT_MSR_LOAD_COUNT  0x00002009
+#define VM_ENTRY_MSR_LOAD_ADDR  0x0000200a
+#define VM_ENTRY_MSR_LOAD_COUNT 0x0000200b
 #define IA32_SYSENTER_CS                    0x00000174
 
 /* * CR3-Target Count (32-bit Control Field) 
@@ -173,7 +174,9 @@
 #define MSR_IA32_FS_BASE   0xC0000100
 #define MSR_IA32_GS_BASE   0xC000010
 
-struct vmcs{
+#define HOST_CPU_ID 1
+
+struct vmcs_region{
     u32 revision_id;
     u32 abort;
     char data[0]
@@ -193,7 +196,7 @@ struct vmx_exec_ctrls{
     uint32_t vm_exit; 
 };
 
-struct _msr_entry 
+struct msr_entry 
 {
     uint32_t index; 
     uint32_t reserved; 

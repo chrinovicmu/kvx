@@ -9,7 +9,7 @@ asmlinkage void ex_handler_rdmsr_unsafe(void)
 {
 
 }
-static inline void cpuid(uint32_t leaf,
+static inline void _cpuid(uint32_t leaf,
                          uint32_t *eax,
                          uint32_t *ebx,
                          uint32_t *ecx,
@@ -51,7 +51,7 @@ bool cpu_has_vpid(void)
     uint32_t eax, ebx, ecx, edx;
 
     /* CPUID leaf 1: ECX[5] == VPID */
-    cpuid(1, &eax, &ebx, &ecx, &edx);
+    _cpuid(1, &eax, &ebx, &ecx, &edx);
 
     return (ecx & (1u << 5)) != 0;
 }

@@ -36,7 +36,7 @@ struct vcpu {
     struct kvx_vm *vm;
     struct host_cpu *hcpu;
 
-    int vcpu_id;
+    int vpid;
     int target_cpu_id;  
 
     int launched; 

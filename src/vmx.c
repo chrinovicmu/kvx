@@ -8,10 +8,11 @@
 #include <linux/printk.h>
 #include <linux/sched.h>
 #include <linux/smp.h> 
+#include <linux/kthread.h>
 #include <asm/processor.h>
 #include <asm/msr.h>
+#include <asm/io.h> 
 
-#include <stdint.h>
 #include <vmx.h>
 #include <vmcs.h>
 #include <vmx_ops.h>
@@ -98,11 +99,13 @@ bool kvx_setup_feature_control(void)
     }
 
     /*lock MSR */ 
-    __wrmsr(MSR_IA32_FEATURE_CONTROL, required); 
+    __wrmsr(MSR_IA32_FEATURE_CONTROL,
+            (uint32_t)(required & 0xFFFFFFFF) ,
+            (uint32_t)((required >> 32) & 0xFFFFFFFF)); 
 
     fc = __rdmsr1(MSR_IA32_FEATURE_CONTROL); 
 
-    if((fc & required) |= required)
+    if((fc & required) != required)
     {
         pr_err("failed to lock IA32_FEATURE_CONTROL with required bit\n"); 
         return false; 
@@ -118,7 +121,7 @@ int kvx_vcpu_pin_to_cpu(struct vcpu *vcpu, int target_cpu_id)
 
     if(!vcpu->host_task)
     {
-        pr_err("KVX: VCPU %d has no host task assigned.\n", vcpu->vcpu_id); 
+        pr_err("KVX: VCPU %d has no host task assigned.\n", vcpu->vpid); 
         return -EINVAL; 
     }
 
@@ -127,7 +130,7 @@ int kvx_vcpu_pin_to_cpu(struct vcpu *vcpu, int target_cpu_id)
     if(!cpu_possible(target_cpu_id))
     {
         pr_err("KVX: Invalid host CPU ID %d for pinning VCPU %d.\n", 
-               target_cpu_id, vcpu->vcpu_id); 
+               target_cpu_id, vcpu->vpid); 
         return -EINVAL; 
     }
 
@@ -138,13 +141,11 @@ int kvx_vcpu_pin_to_cpu(struct vcpu *vcpu, int target_cpu_id)
     if(ret == 0)
     {
         PDEBUG("KVX: Successfuly pinned VCPU %d to Host CPU %d.\n", 
-               vcpu->vcpu_id, target_cpu_id); 
-
-        vcpu->host_cpu_id = target_cpu_id;
+               vcpu->vpid, target_cpu_id); 
     }
     else{
         pr_err("KVX: Failed to pin VCPU %d to CPU %d, error : %d\n", 
-               vcpu->vcpu_id, target_cpu_id, ret); 
+               vcpu->vpid, target_cpu_id, ret); 
     }
 
     return ret; 
@@ -172,11 +173,10 @@ void kvx_vcpu_unpin_and_stop(struct vcpu *vcpu)
 static struct host_cpu * kvx_host_cpu_create(int logical_cpu_id)
 {
     struct host_cpu * hcpu; 
-    size_t vcpu_array_size; 
 
     hcpu = kmalloc(sizeof(*hcpu), GFP_KERNEL); 
     if(!hcpu)
-        return -ENOMEM; 
+        return ERR_PTR(-ENOMEM); 
 
     hcpu->logical_cpu_id = logical_cpu_id; 
 
@@ -230,7 +230,7 @@ static int kvx_setup_vmcs_region(struct vcpu *vcpu)
     uint32_t vmcs_size = _get_vmcs_size(); 
     size_t alloc_size = (vmcs_size <= PAGE_SIZE) ? PAGE_SIZE : PAGE_ALIGN(vmcs_size); 
 
-    vcpu->vmcs = (struct vmcs *)__get_free_pages(
+    vcpu->vmcs = (struct vmcs_region *)__get_free_pages(
         GFP_KERNEL | __GFP_ZERO, get_order(alloc_size)); 
     if(!vcpu->vmcs)
         return -ENOMEM; 
@@ -328,7 +328,7 @@ static int kvx_set_cr3_target_value(uint32_t idx,
     return 0; 
 }
 
-static int kvx_set_cr3_target_count(uint32_t)
+static int kvx_set_cr3_target_count(uint32_t count)
 {
     CHECK_VMWRITE(CR3_TARGET_COUNT, (uint64_t)count); 
     return 0; 
@@ -336,7 +336,7 @@ static int kvx_set_cr3_target_count(uint32_t)
 
 static int kvx_init_cr3_targets(void)
 {
-    if(kvx_set_cr3_target_count(0)) != 0)
+    if(kvx_set_cr3_target_count(0) != 0)
         return -1; 
 
     for(int i = 0; i < 4; i++)
@@ -352,7 +352,8 @@ static int kvx_setup_io_bitmap(struct vcpu *vcpu)
         return -EINVAL;
 
     size_t total_bitmap_size = 2 * VMCS_IO_BITMAP_SIZE;
-    vcpu->io_bitmap = (uint32_t *)__get_free_pages(GFP_KERNEL,
+
+    vcpu->io_bitmap = (uint8_t *)__get_free_pages(GFP_KERNEL,
                                                    get_order(total_bitmap_size));
     if(!vcpu->io_bitmap)
     {
@@ -372,14 +373,14 @@ static int kvx_setup_io_bitmap(struct vcpu *vcpu)
     if(_vmwrite(VMCS_IO_BITMAP_A, vcpu->io_bitmap_pa) != 0)
     {
         PDEBUG("VMWrite VMCS_IO_BITMAP_A failed\n");
-        kvx_free_io_bitmap(vcpu->io_bitmap); 
+        kvx_free_io_bitmap(vcpu); 
         return -EIO; 
     }
 
     if(_vmwrite(VMCS_IO_BITMAP_B, vcpu->io_bitmap_pa + VMCS_IO_BITMAP_SIZE) != 0)
     {
         PDEBUG("VMWrite VMCS_IO_BITMAP_B failed\n"); 
-        kvx_free_io_bitmap(vcpu->io_bitmap); 
+        kvx_free_io_bitmap(vcpu); 
         return -EIO; 
     }
 
@@ -409,7 +410,7 @@ static int kvx_set_exception_intercept(struct vcpu *vcpu, int vector)
     return ret; 
 }
 
-static int kvx_clear_exception_intercept(struct vcpu, int vector) 
+static int kvx_clear_exception_intercept(struct vcpu *vcpu, int vector) 
 {
     int ret;
     if(vector >= 32)
@@ -463,7 +464,7 @@ static struct msr_entry *alloc_msr_entry(size_t n_entries)
 
     struct page *p = alloc_pages(GFP_KERNEL | __GFP_ZERO, order); 
     if(!p)
-        return -ENOMEM; 
+        return ERR_PTR(-ENOMEM); 
 
     return (struct msr_entry*)page_address(p); 
 }
@@ -517,35 +518,43 @@ int kvx_setup_msr_areas(struct vcpu *vcpu,
     if (!vcpu)
         return -EINVAL;
 
-        /* VMCS count fields are 16-bit */
+    #ifndef UINT16_MAX
+    #define UINT16_MAX 65535
+    #endif 
+
+    /* VMCS count fields are 16-bit */
     if (vmexit_count > UINT16_MAX || vmentry_count > UINT16_MAX)
         return -EINVAL; 
 
     /*VM-exit MSR-store area (guest MSRs → memory on exit) */
     vcpu->vmexit_store_area = alloc_msr_entry(vmexit_count);
-    if (!vcpu->vmexit_store_area) {
-        rc = -ENOMEM;
-        goto out;
+    if (IS_ERR(vcpu->vmexit_store_area)) 
+    {
+        rc = PTR_ERR(vcpu->vmexit_store_area); 
+        vcpu->vmexit_store_area = NULL; 
+        goto _out;
     }
-    vcpu->vmexit_store_pa = page_to_phys(virt_to_page(vcpu->vmexit_store_area));
+    vcpu->vmexit_store_pa = virt_to_phys(vcpu->vmexit_store_area);
 
     /* VM-exit MSR-load area (memory → host MSRs on exit) */
     vcpu->vmexit_load_area = alloc_msr_entry(vmentry_count);
-    if (!vcpu->vmexit_load_area)
+    if (IS_ERR(vcpu->vmexit_load_area))
     {
-        rc = -ENOMEM;
-        goto out_free_exit_store;
+        rc = PTR_ERR(vcpu->vmexit_load_area); 
+        vcpu->vmexit_load_area = NULL; 
+        goto _out_free_exit_store;
     }
-    vcpu->vmexit_load_pa = page_to_phys(virt_to_page(vcpu->vmexit_load_area));
+    vcpu->vmexit_load_pa = virt_to_phys(vcpu->vmexit_load_area);
 
     /* VM-entry MSR-load area (memory → guest MSRs on entry) */
     vcpu->vmentry_load_area = alloc_msr_entry(vmentry_count);
-    if (!vcpu->vmentry_load_area) 
+    if (IS_ERR(vcpu->vmentry_load_area))
     {
-        rc = -ENOMEM;
-        goto out_free_exit_load;
+        rc = PTR_ERR(vcpu->vmentry_load_area); 
+        vcpu->vmentry_load_area = NULL; 
+        goto _out_free_exit_load;
     }
-    vcpu->vmentry_load_pa = page_to_phys(virt_to_page(vcpu->vmentry_load_area));
+    vcpu->vmentry_load_pa = virt_to_phys(vcpu->vmentry_load_area);
 
     populate_msr_store_area(vcpu->vmexit_store_area, vmexit_count, vmexit_list);
 
@@ -555,9 +564,8 @@ int kvx_setup_msr_areas(struct vcpu *vcpu,
         uint32_t idx = vmentry_list[i];
         uint64_t val = 0;
 
-            /* Some MSRs may not be readable; policy decision required */
-            val = vmentry_values ? vmentry_values[i] : 0;
-        }
+        /* Some MSRs may not be readable; policy decision required */
+        val = vmentry_values ? vmentry_values[i] : 0;
 
         vcpu->vmexit_load_area[i].index    = idx;
         vcpu->vmexit_load_area[i].reserved = 0;
@@ -572,35 +580,35 @@ int kvx_setup_msr_areas(struct vcpu *vcpu,
     vcpu->vmexit_count  = vmexit_count;
     vcpu->vmentry_count = vmentry_count;
 
-    if (_vmwrite(VMX_EXIT_MSR_STORE_ADDR, vcpu->vmexit_store_pa) ||
-        _vmwrite(VMX_EXIT_MSR_STORE_COUNT, (uint64_t)vmexit_count) ||
-        _vmwrite(VMX_EXIT_MSR_LOAD_ADDR,   vcpu->vmexit_load_pa) ||
-        _vmwrite(VMX_EXIT_MSR_LOAD_COUNT,  (uint64_t)vmentry_count) ||
-        _vmwrite(VMX_ENTRY_MSR_LOAD_ADDR,  vcpu->vmentry_load_pa) ||
-        _vmwrite(VMX_ENTRY_MSR_LOAD_COUNT, (uint64_t)vmentry_count)) 
+    if (_vmwrite(VM_EXIT_MSR_STORE_ADDR, vcpu->vmexit_store_pa) ||
+        _vmwrite(VM_EXIT_MSR_STORE_COUNT, (uint64_t)vmexit_count) ||
+        _vmwrite(VM_EXIT_MSR_LOAD_ADDR,   vcpu->vmexit_load_pa) ||
+        _vmwrite(VM_EXIT_MSR_LOAD_COUNT,  (uint64_t)vmentry_count) ||
+        _vmwrite(VM_ENTRY_MSR_LOAD_ADDR,  vcpu->vmentry_load_pa) ||
+        _vmwrite(VM_ENTRY_MSR_LOAD_COUNT, (uint64_t)vmentry_count)) 
     {
         rc = -EIO;
-        goto out_free_all;
+        goto _out_free_all;
     }
 
     return 0;
 
-out_free_all:
+_out_free_all:
     free_msr_area(vcpu->vmentry_load_area, vmentry_count);
     vcpu->vmentry_load_area = NULL;
     vcpu->vmentry_load_pa = 0;
 
-out_free_exit_load:
+_out_free_exit_load:
     free_msr_area(vcpu->vmexit_load_area, vmentry_count);
     vcpu->vmexit_load_area = NULL;
     vcpu->vmexit_load_pa = 0;
 
-out_free_exit_store:
+_out_free_exit_store:
     free_msr_area(vcpu->vmexit_store_area, vmexit_count);
     vcpu->vmexit_store_area = NULL;
     vcpu->vmexit_store_pa = 0;
 
-out:
+_out:
     return rc;
 }
 
@@ -649,7 +657,7 @@ static int kvx_vcpu_setup_msr_state(struct vcpu *vcpu)
 
     /*prepare guest initial values for vm-entry 
      * default: long mode (LME/LMA) and syscall enable */ 
-    vcpu->efer = EFER_MLE | EFER_LMA | EFER_SCE;
+    vcpu->efer = EFER_LME | EFER_LMA | EFER_SCE;
 
     vmentry_values[0] = vcpu->efer;          // Guest EFER
     vmentry_values[1] = 0;                  // Guest STAR
@@ -662,7 +670,7 @@ static int kvx_vcpu_setup_msr_state(struct vcpu *vcpu)
 
     return kvx_setup_msr_areas(vcpu, 
                                vcpu->msr_indices, vcpu->msr_count,
-                               vcpu->msr_indices, vmentry_values, 
+                               vcpu->msr_indices, (uint32_t *)vmentry_values, 
                                vcpu->msr_count); 
 }
 
@@ -670,7 +678,7 @@ static void kvx_init_exec_controls(struct vcpu *vcpu)
 {
     struct vmx_exec_ctrls *controls = &vcpu->controls; 
 
-    controls->pinbased = 
+    controls->pin_based = 
         VMCS_PIN_EXTINT_EXITING | 
         VMCS_PIN_NMI_EXITING  | 
         VMCS_PIN_VIRTUAL_NMIS |
@@ -710,7 +718,7 @@ static void kvx_init_exec_controls(struct vcpu *vcpu)
         VMCS_EXIT_ACK_INTR_ON_EXIT; 
 }
 
-static kvx_apply_exec_controls(struct vcpu *vcpu)
+static int kvx_apply_exec_controls(struct vcpu *vcpu)
 {
     struct vmx_exec_ctrls *controls = &vcpu->controls; 
     uint64_t msr; 
@@ -722,13 +730,15 @@ static kvx_apply_exec_controls(struct vcpu *vcpu)
     msr = __rdmsr1(MSR_IA32_VMX_PINBASED_CTLS); 
     allowed0 = (uint32_t)(msr & 0xFFFFFFFF); 
     allowed1 = (uint32_t)(msr >> 32);
-    final = (controls->pinbased | allowed1) & (allowed0 | allowed1); 
+
+    final = (controls->pin_based | allowed1) & (allowed0 | allowed1); 
     CHECK_VMWRITE(VMCS_PIN_BASED_EXEC_CONTROLS, final); 
 
     /*primary processor-based*/
     msr = __rdmsr1(MSR_IA32_VMX_PROCBASED_CTLS); 
     allowed0 = (uint32_t)(msr & 0xFFFFFFFF); 
     allowed1 = (uint32_t)(msr >> 32); 
+
     final = (controls->primary_proc | allowed1) & (allowed0 | allowed1); 
     CHECK_VMWRITE(VMCS_PRIMARY_PROC_BASED_EXEC_CONTROLS, final);
 
@@ -736,6 +746,7 @@ static kvx_apply_exec_controls(struct vcpu *vcpu)
     msr = __rdmsr1(MSR_IA32_VMX_PROCBASED_CTLS2); 
     allowed0 = (uint32_t)(msr & 0xFFFFFFFF); 
     allowed1 = (uint32_t)(msr >> 32); 
+
     final = (controls->secondary_proc | allowed1) & (allowed0 | allowed1); 
     CHECK_VMWRITE(VMCS_SECONDARY_PROC_BASED_EXEC_CONTROLS, final);
 
@@ -743,12 +754,14 @@ static kvx_apply_exec_controls(struct vcpu *vcpu)
     msr = __rdmsr1(MSR_IA32_VMX_ENTRY_CTLS); 
     allowed0 = (uint32_t)(msr & 0xFFFFFFFF); 
     allowed1 = (uint32_t)(msr >> 32); 
+
     final = (controls->vm_entry | allowed1) & (allowed0 | allowed1); 
     CHECK_VMWRITE(VMCS_ENTRY_CONTROLS, final); 
 
     msr = __rdmsr1(MSR_IA32_VMX_EXIT_CTLS); 
     allowed0 = (uint32_t)(msr & 0xFFFFFFFF); 
     allowed1 = (uint32_t)(msr >> 32); 
+
     final = (controls->vm_exit | allowed1) & (allowed0 | allowed1); 
     CHECK_VMWRITE(VMCS_EXIT_CONTROLS, final); 
 
@@ -768,10 +781,10 @@ int kvx_setup_exec_controls(struct vcpu *vcpu)
 
 }
 
-struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id)
+struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vpid)
 {
-    if(!kvx_vm)
-        return -EINVAL; 
+    if(!vm)
+        return ERR_PTR(-EINVAL); 
 
     struct vcpu *vcpu;
     struct host_cpu *hcpu; 
@@ -780,10 +793,10 @@ struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id)
     /* Allocate zeroed VCPU struct */
     vcpu = kzalloc(sizeof(*vcpu), GFP_KERNEL);
     if (!vcpu)
-        return -ENOMEM;
+        return ERR_PTR(-ENOMEM);
 
     vcpu->vm = vm;
-    vcpu->vcpu_id = vcpu_id;
+    vcpu->vpid = vpid;
     vcpu->state = VCPU_STATE_UNINITIALIZED; 
     vcpu->halted = false; 
 
@@ -796,12 +809,12 @@ struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id)
     spin_lock_init(&vcpu->lock);
     init_waitqueue_head(&vcpu->wq); 
 
-    hcpu = kvx_create_host_cpu(HOST_CPU_ID); 
-    if(hcpu)
+    hcpu = kvx_host_cpu_create(HOST_CPU_ID); 
+    if(IS_ERR_OR_NULL(hcpu))
         goto _out_free_vcpu; 
 
     vcpu->hcpu = hcpu; 
-    vcpu->host_cpu_id = hcpu->logical_cpu_id; 
+    vcpu->target_cpu_id = hcpu->logical_cpu_id; 
 
     /*alllocate vCPU stack */ 
     vcpu->host_stack = (void *)__get_free_pages(
@@ -831,7 +844,7 @@ struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id)
     if(cpu_has_vpid())
     {
         uint64_t vpid = vcpu->vpid; 
-        CHECK_VMWRITE(VMCS_VPID, vpidI); 
+        CHECK_VMWRITE(VMCS_VPID, vpid); 
     }
 
      /* Setup IO bitmap */
@@ -865,7 +878,7 @@ struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id)
         goto _out_free_msr_bitmap; 
     }
 
-    pr_info("VCPU %d Initialized successfuly\n", vcpu_id); 
+    pr_info("VCPU %d Initialized successfuly\n", vpid); 
 
     return vcpu; 
 
@@ -889,7 +902,7 @@ _out_free_vcpu:
 void kvx_free_io_bitmap(struct vcpu *vcpu)
 {
     if(!vcpu)
-        return -EINVAL; 
+        return;
 
     if (vcpu->io_bitmap) 
     {
@@ -902,7 +915,7 @@ void kvx_free_io_bitmap(struct vcpu *vcpu)
 void kvx_free_msr_bitmap(struct vcpu *vcpu)
 {
     if(!vcpu)
-        return -EINVAL; 
+        return; 
 
     if (vcpu->msr_bitmap) 
     {
@@ -924,11 +937,11 @@ void kvx_free_vmcs_region(struct vcpu *vcpu)
 
 void kvx_free_vmxon_region(struct host_cpu *hcpu)
 {
-    if (vcpu->vmxon) 
+    if (hcpu->vmxon) 
     {
-        free_pages((unsigned long)vcpu->vmxon, 0); // VMXON is 1 page
-        vcpu->vmxon = NULL;
-        vcpu->vmxon_pa = 0;
+        free_pages((unsigned long)hcpu->vmxon, 0); // VMXON is 1 page
+        hcpu->vmxon = NULL;
+        hcpu->vmxon_pa = 0;
     }
 }
 
@@ -1048,7 +1061,7 @@ int kvx_init_vmcs_state(struct vcpu *vcpu)
 
     int ret;
 
-    if(ret = kvx_setup_host_state(vcpu) != 0)
+    if((ret = kvx_setup_host_state(vcpu)) != 0)
     {
         pr_err("Host state setup faile : err %d\n", ret); 
         return -1; 
@@ -1067,40 +1080,46 @@ void kvx_dump_vcpu(struct vcpu *vcpu)
 {
     pr_info("\n*** Guest State ***\n\n");     
 
-    pr_info("CR0: actual=0x%llx, shadow=0x%llx, mask=0x%llx\n", 
-            __vmread(GUEST_CR0),
-            __vmread(CR0_READ_SHADOW), 
-            __vmread(CR0_GUEST_HOST_MASK)); 
+    pr_info("CR0: actual=0x%lx, shadow=0x%lx, mask=0x%lx\n",
+            (unsigned long)__vmread(GUEST_CR0),
+            (unsigned long)__vmread(CR0_READ_SHADOW), 
+            (unsigned long)__vmread(CR0_GUEST_HOST_MASK)); 
 
-    pr_info("CR4: actual=0x%llx, shadow=0x%llx, mask=0x%llx\n", 
-            __vmread(GUEST_CR4), 
-            __vmread(CR4_READ_SHADOW), 
-            __vmread(CR4_GUEST_HOST_MASK)); 
+    pr_info("CR4: actual=0x%lx, shadow=0x%lx, mask=0x%lx\n", 
+            (unsigned long)__vmread(GUEST_CR4), 
+            (unsigned long)__vmread(CR4_READ_SHADOW), 
+            (unsigned long)__vmread(CR4_GUEST_HOST_MASK)); 
 
-    pr_info("CR3: 0x%llx\n", __vmread(GUEST_CR3));
+    pr_info("CR3: 0x%llx\n", (unsigned long)__vmread(GUEST_CR3));
 
     if((vcpu->controls.secondary_proc & VMCS_PROC2_ENABLE_EPT) &&
        (__vmread(GUEST_CR4) & X86_CR4_PAE) && 
         !(vcpu->controls.vm_entry & VM_ENTRY_IA32E_MODE))
     {
-        pr_info("PDPTE0 = 0x%llx PDPTE1 = 0x%llx\n", 
-                __vmread(GUEST_PDPTE(0)), __vmread(GUEST_PDPTE(1))); 
-        pr_info("PDPTE2 = 0x%llx PDPTE3 = 0x%llx\n", 
-                __vmread(GUEST_PDPTE(2)), __vmread(GUEST_PDPTE(3))); 
+        pr_info("PDPTE0 = 0x%lx PDPTE1 = 0x%lx\n",
+                (unsigned long)__vmread(GUEST_PDPTE(0)),
+                (unsigned long)__vmread(GUEST_PDPTE(1))); 
+
+        pr_info("PDPTE2 = 0x%lx PDPTE3 = 0x%lx\n", 
+                (unsigned long)__vmread(GUEST_PDPTE(2)),
+                (unsigned long)__vmread(GUEST_PDPTE(3))); 
     }
 
-    pr_info("RSP = 0x%llx (0x%llx) RIP = 0x%llx (0x%llx)\n", 
-            __vmread(GUEST_RSP), vcpu->regs.rsp, 
-            __vmread(GUEST_RIP), vcpu->regs.rip); 
+    pr_info("RSP = 0x%lx (0x%lx) RIP = 0x%lx (0x%lx)\n", 
+            (unsigned long)__vmread(GUEST_RSP), 
+            (unsigned long)vcpu->regs.rsp, 
+            (unsigned long)__vmread(GUEST_RIP),
+            (unsigned long)vcpu->regs.rip); 
 
-    pr_info("RFLAGS=0x%llx (0x%llx) DR7 = 0x%llx\n", 
-            __vmread(GUEST_RFLAGS), vcpu->regs.rflags, 
-            __vmread(GUEST_DR7)); 
+    pr_info("RFLAGS=0x%lx (0x%lx) DR7 = 0x%lx\n", 
+            (unsigned long)__vmread(GUEST_RFLAGS), 
+            (unsigned long)vcpu->regs.rflags, 
+            (unsigned long)__vmread(GUEST_DR7)); 
 
     pr_info("Sysenter RSP=0x%llx CS:RIP=0x%04:0x%llx\n", 
-           (uint32_t)(__vmread(GUEST_SYSENTER_ESP) & 0xFFFFFFFF), 
-           (uint32_t) __vmread(GUEST_SYSENTER_CS), 
-            (uint32_t)(__vmread(GUEST_SYSENTER_EIP) & 0xFFFFFFFF)); 
+            (unsigned long)(__vmread(GUEST_SYSENTER_ESP) & 0xFFFFFFFF), 
+            (unsigned long)__vmread(GUEST_SYSENTER_CS), 
+            (unsigned long)(__vmread(GUEST_SYSENTER_EIP) & 0xFFFFFFFF)); 
     
 /*    
     pr_info("\n*** Host State ***\n\n");

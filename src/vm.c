@@ -147,7 +147,10 @@ int kvx_vm_add_vcpu(struct kvx_vm *vm, int vcpu_id)
 
     spin_lock(&vm->lock); 
 
-    if(vcpu_id =< 0 || vcpu_id >= vm->max_vcpus || vm->vcpus[vcpu_id] != NULL)
+    /*checking against 0 becasue the vcpu_id 0 
+     * is reserved for the host if vpid used 
+     * */ 
+    if(vcpu_id <= 0 || vcpu_id >= vm->max_vcpus || vm->vcpus[vcpu_id] != NULL)
     {
         pr_err("KVX: Invalid or already existing VCPU ID %d.\n", vcpu_id); 
         ret = -EINVAL; 

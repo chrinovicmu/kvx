@@ -24,16 +24,16 @@
 #define HOST_IA32_SYSENTER_ESP			0x00006c10
 #define HOST_IA32_SYSENTER_EIP			0x00006c12
 #define HOST_IA32_SYSENTER_CS			0x00004c00
-#define HOST_SYSENTER_CS       0x00006C0C
-#define HOST_SYSENTER_ESP      0x00006C0E
-#define HOST_SYSENTER_EIP      0x00006C10
+#define HOST_SYSENTER_CS                0x00006C0C
+#define HOST_SYSENTER_ESP               0x00006C0E
+#define HOST_SYSENTER_EIP               0x00006C10
 #define GUEST_CR0						0x00006800
 #define GUEST_CR3						0x00006802
 #define GUEST_CR4						0x00006804
 
 #define	GUEST_RSP						0x0000681c
 #define	GUEST_RIP						0x0000681e
-
+#define GUEST_RFLAGS                    0x00006820
 #define MSR_IA32_CR_PAT					0x00000277
 #define MSR_EFER						0xc0000080
 #define MSR_CORE_PERF_GLOBAL_CTRL		0x0000038f
@@ -77,7 +77,7 @@
 #define GUEST_TR_BASE					0x00006814
 #define GUEST_GDTR_BASE					0x00006816
 #define GUEST_IDTR_BASE                 0x00006818 
-
+#define GUEST_DR7                       0x0000681a
 #define GUEST_IA32_DEBUGCTL				0x00002802
 #define GUEST_IA32_PAT					0x00002804
 #define GUEST_IA32_EFER					0x00002806
