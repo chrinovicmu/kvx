@@ -163,6 +163,11 @@ static inline bool kvx_vcpu_msr_bitmap_enabled(struct vcpu *vcpu)
     return vcpu->controls.primary_proc & VMCS_PROC_USE_MSR_BITMAPS; 
 }
 
+static inline bool kvx_vcpu_ept_enabled(struct vcpu *vcpu)
+{
+    return (vcpu->controls.secondary_proc & VMCS_PROC2_ENABLE_EPT) != 0;
+}
+
 void kvx_vcpu_unpin_and_stop(struct vcpu *vcpu)
 {
     set_cpus_allowed_ptr(vcpu->host_task, cpu_online_mask); 
