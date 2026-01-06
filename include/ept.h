@@ -123,4 +123,54 @@ struct ept_context
 
 }; 
 
+bool kvx_ept_check_support(void); 
+struct ept_context *kvx_ept_context_create(void); 
+void kvx_ept_context_destroy(struct ept_context *ept); 
 
+/*map guest physical page to host physical page */ 
+int kvx_ept_map_page(struct ept_context *ept, uint64_t gpa,
+                     uint64_t hpa, uint64_t flags); 
+
+/*map a range of guest physical memory */ 
+int kvx_ept_map_range(struct ept_context *ept, uint64_t gpa_start,
+                      uint64_t hpa_start, uint64_t size, uint64_t flags); 
+
+int kvx_ept_unmap_page(struct ept_context *ept, uint64_t gpa); 
+
+/*look up host physicall address for gpa 
+ * walk EPT tables to find HPA mapped to a given GPA*/ 
+int kvx_ept_get_mapping(struct ept_context *ept, uint64_t gpa, uint64_t *hpa); 
+
+/*change memory type for a mapped page */ 
+int kvx_ept_set_memory_type(struct ept_context *ept, uint64_t gpa, uint8_t memtype); 
+
+int kvx_ept_handle_violation(struct vcpu *vcpu, uint64_t gpa, uint64_t exit_qualification); 
+
+/*invalidate all TLB entries for EPT */ 
+void kvx_ept_invalidate_context(struct ept_context *ept); 
+
+void kvx_ept_dump_tables(struct ept_context *ept); 
+
+
+/*extract indec for each level from a GPA */ 
+#define EPT_PML4_INDEX(gpa)     (((gpa) >> 39) & 0x1FF)
+#define EPT_PDPT_INDEX(gpa)     (((gpa) >> 30) & 0x1FF)
+#define EPT_PD_INDEX(gpa)       (((gpa) >> 21) & 0x1FF)
+#define EPT_PT_INDEX(gpa)       (((gpa) >> 12) & 0x1FF)
+#define EPT_PAGE_OFFSET(gpa)    ((gpa) >> 0xFFF )
+
+
+/*EPT capabality bits (IA32_VMX_EPT_VPID_CAP_ MSR) */ 
+
+#define EPT_CAP_RWX_ONLY        (1ULL << 0)
+#define EPT_CAP_PAGE_WALK_4     (1ULL << 6)
+#define EPT_CAP_MEMTYPE_UC      (1ULL << 8)
+#define EPT_CAP_MEMTYPE_WB      (1ULL << 14)
+#define EPT_CAP_2MB_PAGES       (1ULL << 16)
+#define EPT_CAP_1GB_PAGES       (1ULL << 17)
+#define EPT_CAP_INVEPT          (1ULL << 20)
+#define EPT_CAP_AD_FLAGS        (1ULL << 21)
+#define EPT_CAP_INVEPT_SINGLE   (1ULL << 25) /*single context INVEPT */ 
+#define EPT_CAP_INVEPT_ALL      (1ULL << 26) /*all-context INVEPT */ 
+
+#endif /*EPT_H */ 
