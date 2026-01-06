@@ -2,7 +2,7 @@
 #define EPT_H
 
 #include <linux/types.h>
-#include <stdint.h>
+#include <vmx.h> 
 
 #define EPT_LEVLS               4
 #define EPT_ENTRIES_PER_TABALE  512 

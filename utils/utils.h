@@ -10,6 +10,8 @@
 
 #define CACHE_LINE_SIZE 64
 
+#define _likely(x)   __builtin_expect(!!(x), 1)
+#define _unlikely(x) __builtin_expect(!!(x), 0)
 #define DEBOG_LOG 1
 
 #if DEBOG_LOG

@@ -11,6 +11,7 @@
 #include <vmx.h>
 #include <ept.h>
 #include <vmx_ops.h>
+#include <utils.h> 
 
 
 bool kvx_ept_check_support(void)
@@ -138,6 +139,128 @@ void kvx_ept_context_destroy(struct ept_context *ept)
             ept->stats.total_mapped); 
 
     kfree(ept); 
+}
+
+static inline void *kvx_ept_alloc_table(void)
+{
+    void *table = (void *)__get_free_page(GFP_KERNEL | __GFP_ZERO); 
+    if(_unlikely(!table)
+    {
+        pr_err("KVX: Failed to alloc EPT table\n");
+        return NULL; 
+    }
+
+    return table; 
+}
+
+static void *kvx_ept_get_or_create_table(ept_entry_t *entry_ptr, int level)
+{
+    ept_entry_t entry = *entry_ptr; 
+    void *table_va; 
+    uint64_t table_pa; 
+
+    if(entry & EPT_READ_ACCESS)
+    {
+        table_pa = entry & EPT_ADDR_MASK; 
+    }
+
+    table_va = kvx_ept_alloc_table(); 
+    if(!table_va)
+        return NULL; 
+
+    table_pa = virt_to_phys(table_pa); 
+
+    /*create entry pointing to new table 
+     * for non-leaf entries , we give RWX permissions*/ 
+    *entry_ptr = (table_pa & EPT_ADDR_MASK) | EPT_RWX; 
+
+    return table_va; 
+}
+
+int kvx_ept_map_page(struct ept_context *ept, uint64_t gpa, 
+                     uint64_t hpa, uint64_t flags) 
+{
+    ept_pdpt_t *pdpt; 
+    ept_pd_t *pd; 
+    ept_pt_t *pt; 
+
+    unsigned long irq_flags ; 
+
+    if(!ept || !ept->pml4)
+    {
+        pr_err("KVX: Invalid EPT context\n"); 
+        return -EINVAL; 
+    }
+
+    /*ensure addresses are page-aligned */ 
+    if((gpa & 0xFFF) || (hpa & 0xFFF))
+    {
+        pr_err("KVX: Addresses must be 4KB aligned (GPA=0x%llx, HPA=0x%llx\n". 
+               gpa, hpa); 
+        return -EINVAL; 
+    }
+
+    /*ensure at least read permission is set */ 
+    if(!(flags & EPT_READ_ACCESS))
+    {
+        pr_err("KVX: EPT mapping must have at least read access\n");
+        return -EINVAL; 
+    }
+
+    spin_lock_t_irqsave(&ept->lock, irq_flags); 
+
+    uint32_t pml4_index = EPT_PML4_INDEX(gpa); 
+
+    /*get PDPT table*/ 
+    pdpt = (ept_pdpt_t *)kvx_ept_get_or_create_table(
+        &ept->pml4->entries[pml4_index], 3);
+    if(!pdpt)
+    {
+        spin_unlock_irqrestore(&ept->lock, irq_flags); 
+        return -ENOMEM; 
+    }
+
+    uint32_t pdpt_idx = EPT_PDPT_INDEX(gpa); 
+
+    pd = (ept_pd_t *)kvx_ept_get_or_create_table(
+        &pdpt->entries[pdpt_idx], 2);
+    if(!pd)
+    {
+        spin_unlock_irqrestore(&ept->lock, irq_flags); 
+        return -ENOMEM; 
+    }
+
+    uint32_t pd_idx = EPT_PD_INDEX(gpa); 
+
+    pt = (ept_pt_t *)kvx_ept_get_or_create_table(
+        &pd->entries[pd_idx], 1); 
+    if(!pt)
+    {
+        spin_unlock_irqrestore(&ept->lock, irq_flags); 
+        return -ENOMEM; 
+    }
+
+    uint32_t pt_idx = EPT_PT_INDEX(gpa); 
+
+    ept_entry_t *leaf_entry &pt->entries[pt_idx]; 
+
+    if(*leaf_entry & EPT_ACCESS_READ)
+    {
+        pr_warn("KVX: GPA 0x%llx already mapped, overwriting\n", gpa); 
+    }
+    else{
+        ept->stats.pages_4kb++; 
+        ept->stats.total_mapped += EPT_PAGE_SIZE_4KB; 
+    }
+    
+    *leaf_entry = (hpa & EPT_ADDR_MASK) | flags | EPTP_MEMTYPE_WB;
+
+    spin_unlock_irqrestore(&ept->lock, irq_flags); 
+
+    PDEBUG("KVX: Mapped GPA 0x%llx -> HPA 0x%llx (flags=0x%llx)\n",
+           gpa, hpa, flags);
+    
+    return 0; 
 }
 
 
