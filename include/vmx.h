@@ -113,5 +113,4 @@ int kvx_vcpu_pin_to_cpu(struct vcpu *vcpu, int target_cpu_id);
 void kvx_vcpu_unpin_and_stop(struct vcpu *vcpu);
 void kvx_free_vcpu(struct vcpu *vcpu);
 int kvx_init_vmcs_state(struct vcpu *vcpu); 
-
-#endif /* HW_H */
+#endif /* VMX_H */

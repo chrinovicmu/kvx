@@ -46,7 +46,7 @@ static inline unsigned long long notrace __rdmsr1(unsigned int msr)
     return ((unsigned long long)high << 32) | low; 
 }
 
-bool cpu_has_vpid(void)
+bool _cpu_has_vpid(void)
 {
     uint32_t eax, ebx, ecx, edx;
 
@@ -54,6 +54,36 @@ bool cpu_has_vpid(void)
     _cpuid(1, &eax, &ebx, &ecx, &edx);
 
     return (ecx & (1u << 5)) != 0;
+}
+
+static inline bool _cpu_invpcid_supported(void)
+{
+    uint32_t eax, ebx, ecx, edx;
+    _cpuid(7, &eax, &ebx, &ecx, &edx);
+
+    return (ebx & (1u << 10)) != 0; // Bit 10 = INVPCID
+}
+
+/* Check if ENPCID (CR4.ENPCID) is set */
+static inline bool _enpcid_enabled(void)
+{
+    uint64_t cr4;
+    asm volatile("mov %%cr4, %0" : "=r"(cr4));
+    return (cr4 & (1ULL << 17)) != 0; // CR4.ENPCID = bit 17
+}
+
+/* Enable ENPCID (CR4.ENPCID) */
+static inline void _enable_enpcid(void)
+{
+    uint64_t cr4;
+    asm volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1ULL << 17);  // Set ENPCID
+    asm volatile("mov %0, %%cr4" :: "r"(cr4));
+}
+
+static inline bool _invpcid_available(void)
+{
+    return _cpu_invpcid_supported() && _enpcid_enabled();
 }
 
 static inline uint64_t _read_cr0(void)
