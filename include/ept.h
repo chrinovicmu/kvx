@@ -39,16 +39,12 @@
 * when set, CPU will allow execution in ring 3 */ 
 #define EPT_USER_EXEC           (1ULL << 10)
 
-/*physical address mask (bits 12-51)
-* mask 40 bit PA field in EPT entries */ 
 #define EPT_ADDR_MASK           0x000FFFFFFFFFF000ULL
 
-/* common permission combinations */ 
 #define EPT_RWX                 (EPT_READ_ACCESS | EPT_WRITE_ACCESS | EPT_EXEC_ACCESS)
 #define EPT_RW                  (EPT_READ_ACCESS | EPT_WRITE_ACCESS)
 #define EPT_RX                  (EPT_READ_ACCESS | EPT_EXEC_ACCESS)
 #define EPT_R                   (EPT_READ_ACCESS)
-
 
 /*EPTP format */ 
 
@@ -65,12 +61,10 @@
 /*enable access and dirty flags for EPT */ 
 #define EPTP_ENABLE_AD_FLAGS    (1ULL << 6)
 
-
-
 /*bits 11:7 - Reserved (must be 0)
 * bits N:12 - Physical address of EPT PML4 table (4KB aligned) */ 
 
-#define CONTRUCT_EPTP(pml4_pa, memtype, enable_ad)  \ 
+#define CONSTRUCT_EPTP(pml4_pa, memtype, enable_ad)  \ 
     (((pml4_pa) & EPT_ADDR_MASK) |                  \
      EPTP_PAGE_WALK_LENGTH_4 |                      \
      ((enable_ad) ? EPTP_ENABLE_AD_FLAGS : 0) |     \
@@ -97,7 +91,6 @@ typedef struct{
 typedef struct{
     ept_entry_t entries[EPT_ENTRIES_PER_TABALE]; 
 } __attribute__((aligned(4096))) ept_pt_t; 
-
 
 struct ept_context
 {

@@ -78,7 +78,7 @@ struct ept_context *kvx_ept_context_create(void)
     /*A/D flags disabled for now */ 
     ept->ad_enabled = false; 
 
-    ept->eptp = CONTRUCT_EPTP(ept->pml4_pa, ept->memtype, ept->enable_ad); 
+    ept->eptp = CONSTRUCT_EPTP(ept->pml4_pa, ept->memtype, ept->enable_ad); 
 
     memset(&ept->stats, 0, sizeof(ept->stats)); 
 
@@ -97,7 +97,7 @@ static void kvx_ept_free_table(void *table_va, int level)
 
     if(level == 1)
     {
-        free_page((unsigned long)table_pa); 
+        free_page((unsigned long)table_va); 
         return; 
     }
 
@@ -195,7 +195,7 @@ int kvx_ept_map_page(struct ept_context *ept, uint64_t gpa,
     /*ensure addresses are page-aligned */ 
     if((gpa & 0xFFF) || (hpa & 0xFFF))
     {
-        pr_err("KVX: Addresses must be 4KB aligned (GPA=0x%llx, HPA=0x%llx\n". 
+        pr_err("KVX: Addresses must be 4KB aligned (GPA=0x%llx, HPA=0x%llx)\n". 
                gpa, hpa); 
         return -EINVAL; 
     }
@@ -242,7 +242,7 @@ int kvx_ept_map_page(struct ept_context *ept, uint64_t gpa,
 
     uint32_t pt_idx = EPT_PT_INDEX(gpa); 
 
-    ept_entry_t *leaf_entry &pt->entries[pt_idx]; 
+    ept_entry_t *leaf_entry = &pt->entries[pt_idx]; 
 
     if(*leaf_entry & EPT_ACCESS_READ)
     {
@@ -263,4 +263,42 @@ int kvx_ept_map_page(struct ept_context *ept, uint64_t gpa,
     return 0; 
 }
 
+/*map multiple pages in a loop */ 
+int kvx_ept_map_range(struct ept_context *ept, uint64_t gpa_start, 
+                      uint64_t hpa_start, uint64_t size, uint64_t flags)
+{
+    uint64_t gpa; 
+    uint64_t hpa; 
+    uint64_t num_pages; 
+    uint64_t i; 
+    int ret; 
 
+    if(!ept)
+        return -EINVAL; 
+
+    /*round size to 4KB page boundary */ 
+    size = PAGE_ALIGN(size); 
+    num_pages = size / EPT_PAGE_SIZE_4KB; 
+
+    pr_info("KVX: Mapping EPT range GPA 0x%llx -> HPA 0x%llx (%llu pages)\n",
+            gpa_start, hpa_start, num_pages); 
+
+    /*map each page in the range */ 
+    for(i = 0; i < num_pages; i++)
+    {
+        gpa = gpa_start + (i * EPT_PAGE_SIZE_4KB); 
+        hpa = hpa_start + (i * EPT_PAGE_SIZE_4KB); 
+
+        ret = kvx_ept_map_page(ept, gpa, hpa, flags);
+        if(ret < 0)
+        {
+            pr_err("KVX: Failed to map page %llu/%llu (GPA=0x%llx)\n", 
+                   i + 1, num_pages, gpa); 
+            return ret; 
+        }
+    }
+
+    pr_info("KVX: Successfully mapped %llu pages\n", num_pages);
+
+    return 0;
+}
