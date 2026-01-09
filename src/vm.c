@@ -1,8 +1,11 @@
+#include <cerrno>
 #include <linux/kthread.h> 
 #include <linux/sched.h>
 #include <linux/smp.h>
 #include <linux/slab.h>     
 #include <linux/vmalloc.h> 
+#include <stddef.h>
+#include <stdint.h>
 #include <vmx.h>
 #include <vm.h>
 #include <utils.h>
@@ -37,6 +40,113 @@ static const struct kvx_vm_operations kvx_default_ops = {
     .dump_regs   = kvx_op_dump_regs,
 };
 
+int kvx_vm_allocate_guest_ram(struct kvx_vm *vm, uint64_t size, uint64_t gpa_start)
+{
+    struct guest_mem_region *region; 
+    uint64_t num_pages; 
+    uint64_t i; 
+    struct page *page; 
+    uint64_t gpa; 
+    uint64_t hpa; 
+    int ret; 
+
+    if(!vm || !vm->ept)
+        return -EINVAL; 
+
+    size = PAGE_ALIGN(size); 
+    num_pages = size / PAGE_SIZE;
+
+    pr_info("KVX: Allocating %llu pages (%llu MB) of guest RAM at GPA 0x%llx\n",
+            num_pages, size / (1024 * 1024), gpa_start);
+
+    region = kzalloc(sizeof(*mr), GFP_KERNEL); 
+    if(!region)
+        return -ENOMEM;
+
+    region->pages = kzalloc(num_pages * sizeof(struct page*), GFP_KERNEL); 
+    if(!region->pages)
+    {
+        kfree(region); 
+        return -ENOMEM; 
+    }
+
+    region->gpa_start = gpa_start; 
+    region->size = size;
+    region->num_pages = num_pages; 
+    region->flags = EPT_RWX;
+
+    for(i = 0;i < num_pages; i++ )
+    {
+        page = alloc_page(GFP_KERNEL | __GFP_ZERO); 
+        if(!page)
+        {
+            pr_err("KVX: Failed to allocate page %llu/%llu\n", 
+                   i + 1, num_pages); 
+            ret = -ENOMEM; 
+            goto _cleanup; 
+        }
+        region->pages[i] = page; 
+        gpa = gpa_start + (i * PAGE_SIZE); 
+        hpa = page_to_phys(page); 
+
+        ret = kvx_ept_map_page(vm->ept, gpa, hpa, EPT_RWX); 
+        if(ret < 0)
+        {
+            pr_err("KVX: Failed tp map page at GPA 0x%llx\n", gpa); 
+            __free_page(page); 
+            goto _cleanup; 
+        }
+        
+        /*progress indicator for every 256MB*/
+        if (i > 0 && (i % (256 * 1024 * 1024 / PAGE_SIZE)) == 0) 
+        {
+            pr_info("KVX: Mapped %llu MB...\n",
+                    (i * PAGE_SIZE) / (1024 * 1024));
+        }
+
+    }
+
+    region->next = vm->mem_regions; 
+    vm->mem_regions = region; 
+    vm->total_guest_ram += size; 
+
+    pr_info("KVX: Successfully allocated and mapped guest RAM\n");
+    
+    kvx_ept_invalidate_context(vm->ept);
+    
+    return 0;
+ 
+}
+
+void kvx_vm_free_guest_mem(struct kvx_vm)
+{
+    struct guest_mem_region *region;
+    struct guest_mem_region *next; 
+    uint64_t i; 
+
+    if(!vm)
+        return; 
+
+    region = vm->mem_regions; 
+    while(!region)
+    {
+        next = region->next; 
+        if(region->pages)
+        {
+            for(i = 0; region->num_pages; i++)
+            {
+                if(region.pages[i])
+                    __free_page(region.pages[i]); 
+            }
+            kfree(region->pages); 
+        }
+        kfree(region); 
+        region = next; 
+    }
+
+    vm->mem_regions = NULL; 
+    vm->total_guest_ram = 0; 
+}
 
 struct kvx_vm * kvx_create_vm(int vm_id, const char *vm_name, 
                               uint64_t ram_size)
@@ -59,40 +169,64 @@ struct kvx_vm * kvx_create_vm(int vm_id, const char *vm_name,
 
     if(vm_name)
         strscpy(vm->vm_name, vm_name, sizeof(vm->vm_name)); 
-
+    else
+        snprintf(vm->vm_name, sizeof(vm->vm_name), "vm-%d", vm_id); 
     spin_lock_init(&vm->lock); 
 
-    vm->guest_ram_size = ram_size; 
-    vm->guest_ram_base = vmalloc(vm->guest_ram_size); 
-
-    if(!vm->guest_ram_base)
+    if(!kvx_ept_check_support())
     {
-        pr_err("KVX: Failed to allocate %llu bytes of RAM for the VM %d\n", 
-               ram_size, vm_id); 
-        kfree(vm); 
-        return NULL; 
+        pr_err("KVX: EPT not supported on ths CPU\n"); 
+        goto _out_free_vm; 
     }
 
-    unsigned char guest_code[] = {
-        0xf4, 
-        0xeb, 
-        0xfd
-    }; 
+    vm->ept = kvx_ept_context_create(); 
+    if(IS_ERR(vm->ept))
+    {
+        pr_err("KVX: Failed to create EPT context\n"); 
+        vm->ept = NULL; 
+        goto _out_free_vm; 
+    }
 
-    memset(vm->guest_ram_base, guest_code, vm->guest_ram_size); 
+    pr_info("KVX: Created EPT context for VM %d (EPTP=0x%llx)\n",
+            vm_id, vm->ept->eptp);
+
+
+    if(ram_size > 0)
+    {
+        ret = kvx_vm_allocate_guest_ram(vm, ram_size, 0x0); 
+        if(ret < 0)
+        {
+            pr_err("KVX: Failed to allocate guest RAM\n"); 
+            goto _out_free_ept; 
+        }
+        pr_info("KVX: Allocated %llu MB guest RAM\n"); 
+    }
 
     vm->vcpus = kcalloc(vm->max_vcpus, sizeof(struct vcpu*), GFP_KERNEL); 
     if(!vm->vcpus)
     {
-        vfree(vm->guest_ram_base); 
-        kfree(vm); 
-        return NULL; 
+        pr_err("KVX: Faild to allocate VCPU array\n"); 
+        goto _out_free_memory; 
     }
+
+    vm->state = VM_INITIALIZED; 
 
     pr_info("KVX: VM '%s' (ID: %d) created with %llu MB RAM\n", 
             vm->vm_name, vm->vm_id, (ram_size >> 20)); 
 
-    return vm; 
+    return vm;
+
+_out_free_memory:
+    kvx_vm_free_guest_mem(vm); 
+_out_free_ept:
+    if(!vm->ept)
+    {
+        kvx_ept_context_destroy(vm->ept); 
+        vm->ept = NULL; 
+    }
+_out_free_vm:
+    kfree(vm); 
+    return NULL; 
 }
 
 void kvx_destroy_vm(struct kvx_vm *vm)
@@ -122,10 +256,11 @@ void kvx_destroy_vm(struct kvx_vm *vm)
         kfree(vm->vcpus); 
     }
 
-    if(vm->guest_ram_base)
+    kvx_vm_free_guest_mem(vm); 
+    if(vm->ept)
     {
-        vfree(vm->guest_ram_base);
-        vm->guest_ram_base = NULL;
+        kvx_ept_context_destroy(vm->ept); 
+        vm->ept = NULL; 
     }
 
     kfree(vm); 
@@ -133,6 +268,23 @@ void kvx_destroy_vm(struct kvx_vm *vm)
     pr_info("KVX: VM destruction complete.\n"); 
 }
 
+int kvx_vm_copy_to_guest(struct kvx_vm *vm, int gpa, const void *data, int size)
+{
+    struct guest_mem_region *region; 
+    uint64_t region_offset; 
+    uint64_t page_index;
+    uint64_t page_offset; 
+    uint64_t bytes_to_copy; 
+    const uint8_t *src = (const uint8_t *)data; 
+    uint8_t *page_va; 
+    size_t copied = 0; 
+
+    if(!vm || !data || size == 0)
+        return -EINVAL; 
+
+    region = vm->mem_regions; 
+
+}
 /**
  * kvx_vm_add_vcpu - Creates and pins a VCPU to a specific host CPU.
  * @vm: The parent virtual machine struct.
@@ -206,11 +358,11 @@ static int kvx_vcpu_loop(void *data)
 
         /*if we are here, it means:
         * handler_vmexit() returned 0 (requesred stop)
-        * VMLAUNCH/VMRESUME failed (hardware error)
+        * VMLAUNCH/VregionESUME failed (hardware error)
         */ 
         if(vcpu->launched)
         {
-            uint64_t error = __vmread(VMCS_INSTRUCTION_ERROR_FIELD);
+            uint64_t error = __vregionead(VMCS_INSTRUCTION_ERROR_FIELD);
             if(error != 0)
             {
                 pr_err("KVX: Hardware Error: %llu\n", error); 

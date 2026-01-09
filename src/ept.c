@@ -51,6 +51,87 @@ bool kvx_ept_check_support(void)
     return true;
 }
 
+int kvx_setup_ept(struct vcpu *vcpu)
+{
+    if(!vcpu)
+        return -EINVAL; 
+
+    if(!kvx_ept_check_support())
+    {
+        pr_err("KVX: EPT not supported on this CPU\n"); 
+        return -ENOTSUP; 
+    }
+
+    if(!kvx_ept_enabled(vcpu))
+    {
+        pr_err("KVX: EPT not enabled in execution controls\n"); 
+        return -EINVAL; 
+    }
+
+    vcpu->ept = kvx_ept_context_create(); 
+    if(IS_ERR(vcpu->ept))
+    {
+        int err = PTR_ERR(vcpu->ept); 
+        vcpu->ept = NULL; 
+        pr_err("KVX: Failed to create EPT context: %d\n"); 
+        return err; 
+    }
+
+    CHECK_VMWRITE(EPT_POINTER, vcpu->ept->eptp); 
+
+    pr_info("KVX: EPT setup complete for VCPU %d (EPTP=0x%llx)\n", 
+            vcpu->vpid, vcpu->ept->eptp); 
+
+    return 0; 
+}
+
+int kvx_handle_ept_violation(struct vcpu *vcpu)
+{
+    uint64_t exit_qualification;
+    uint64_t gpa; 
+    bool data_read; 
+    bool data_write; 
+    bool instr_fetch;
+    bool ept_present; 
+
+    exit_qualification = __vmread(EXIT_QUALIFICATION); 
+    gpa = __vmread(GUEST_PHYSICAL_ADDRESS); 
+
+    data_read = exit_qualification & (1ULL << 0);
+    data_write = exit_qualification & (1ULL << 1);
+    instr_fetch = exit_qualification & (1ULL << 2);
+    ept_present = exit_qualification & (1ULL << 3);
+    
+    pr_err("KVX: EPT violation at GPA 0x%llx\n", gpa);
+    pr_err("  Access type: %s%s%s\n",
+           data_read ? "Read " : "",
+           data_write ? "Write " : "",
+           instr_fetch ? "Exec " : "");
+    pr_err("  EPT entry: %s\n",
+           ept_present ? "Present (permission violation)" : "Not present");
+    pr_err("  Guest RIP: 0x%llx\n", __vmread(GUEST_RIP));
+   
+    /*treat EPT violations as fatat for now */ 
+    return -EFAULT; 
+}
+
+int kvx_vcpu_handle_ept_misconfig(struct vcpu *vcpu)
+{
+    uint64_t gpa; 
+    gpa = __vmread(GUEST_PHYSICAL_ADDRESS); 
+
+    pr_err("KVX: EPT misconfiguration at GPA 0x%llx\n", gpa);
+    pr_err("  Guest RIP: 0x%llx\n", __vmread(GUEST_RIP));
+    pr_err("  This indicates a bug in EPT setup code!\n");
+    
+    if(vcpu->ept)
+        kvx_ept_dump_tables(vcpu->ept); 
+
+    return -EFAULT; 
+
+}
+
+
 struct ept_context *kvx_ept_context_create(void)
 {
     struct ept_context *ept; 

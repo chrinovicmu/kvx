@@ -57,8 +57,6 @@ struct vcpu {
 
     struct vmx_exec_ctrls controls; 
 
-    struct ept_context *ept;  
-
     void *msr_bitmap;
     uint64_t msr_bitmap_pa; 
 
