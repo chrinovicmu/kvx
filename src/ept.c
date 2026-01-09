@@ -1,4 +1,3 @@
-#include <cerrno>
 #include <linux/slab.h>
 #include <linux/gfp.h>
 #include <linux/mm.h>
@@ -301,4 +300,234 @@ int kvx_ept_map_range(struct ept_context *ept, uint64_t gpa_start,
     pr_info("KVX: Successfully mapped %llu pages\n", num_pages);
 
     return 0;
+}
+
+/*walks EPT table to find the leaf entry and clear it */ 
+int kvx_unmap_page(struct ept_context *ept, uint64_t gpa)
+{
+    ept_pdpt *pdpt; 
+    ept_pd_t *pd; 
+    ept_pt_t *pt; 
+    ept_entry_t *leaf_entry; 
+    unsigned long irq_flags; 
+    uint32_t pml4_idx; 
+    uint32_t pdpt_idx;
+    uint32_t pd_idx;
+    uint32_t pt_idx;
+
+    if (!ept || !ept->pml4)
+        return -EINVAL; 
+
+    spin_lock_irqsave(&ept->lock, irq_flags); 
+
+    pml4_idx = EPT_PML4_INDEX(gpa); 
+
+    if(!(ept->pml4->entries[pml4_idx] & EPT_READ_ACCESS))
+    {
+        spin_unlock_irqrestore(&ept->lock, irq_flags); 
+        return -ENOENT; 
+    }
+
+    pdpt = (ept_pdpt_t *)phys_to_virt(
+        ept->pml4.entries[pml4_idx] & EPT_ADDR_MASK);
+
+    pdpt_idx = EPT_PDPT_INDEX(gpa); 
+
+    if(!(pdpt->entries[pdpt_idx] & EPT_READ_ACCESS))
+    {
+        spin_unlock_irqrestore(&ept->lock, irq_flags); 
+        return -ENOENT; 
+    }
+
+    pd = (ept_pd_t*)phys_to_virt(
+        pdpt->entries[pdpt_idx] & EPT_ADDR_MASK); 
+
+    pd_idx = EPT_PD_INDEX(gpa); 
+
+    if(!(pd->entries[pd_idx] & EPT_READ_ACCESS))
+    {
+        spin_unlock_irqrestore(&ept->lock, irq_flags); 
+        return -ENOENT; 
+    }
+
+    pt = (ept_pt_t*)phys_to_virt(
+        pd->entries[pdpt_idx] & EPT_ADDR_MASK); 
+
+    pt_idx = EPT_PT_INDEX(gpa); 
+
+    leaf_entry = &pt->entries[pt_idx]; 
+
+    if(!(*leaf_entry & EPT_READ_ACCESS))
+    {
+        spin_unlock_irqrestore(&ept->lock, irq_flags); 
+        return -ENOENT; 
+    }
+
+    /*clear leaf entry */ 
+    *leaf_entry = 0; 
+
+    ept->stats.pages_4kb--; 
+    ept->stats.total_mapped -= EPT_PAGE_SIZE_4KB; 
+
+    spin_unlock_irqrestore(&ept->lock, irqflags);
+
+    /*invalidate EPT TLB entries for the entir context to ensure consistency */ 
+    kvx_ept_invalidate_context(ept); 
+
+    PDEBUG("KVX: Unmapped GPA 0x%llx\n", gpa)
+}
+
+/*walk EPT tables to find the HPA of given GPA */  
+int kvx_get_mapping(struct ept_context *ept, uint64_t gpa, uint64_t *hpa)
+{
+    ept_pdpt *pdpt; 
+    ept_pd_t *pd; 
+    ept_pt_t *pt; 
+    ept_entry_t *leaf_entry; 
+    unsigned long irq_flags; 
+
+    uint32_t pml4_idx; 
+    uint32_t pdpt_idx;
+    uint32_t pd_idx;
+    uint32_t pt_idx;
+
+    if(!ept || !ept->pml4)
+        return -EINVAL; 
+
+    spin_lock_irqsave(&ept->lock, irq_flags); 
+
+    pml4_idx = EPT_PML4_INDEX(gpa); 
+
+    if(!(ept->pml4->entries[pml4_idx] & EPT_READ_ACCESS))
+    {
+        spin_unlock_irqrestore(&ept->lock, irq_flags); 
+        return -ENOENT; 
+    }
+
+    pdpt = (ept_pdpt*)phys_to_virt(
+        ept->pml4->entries[pml4_idx] & EPT_ADDR_MASK); 
+
+    pdpt_idx = EPT_PDPT_INDEX(gpa); 
+
+    if(!(pdpt->entries[pdpt_idx] & EPT_READ_ACCESS))
+    {
+        spin_unlock_irqrestore(&ept->lock, irq_flags); 
+        return -ENOENT; 
+    }
+
+    pd = (ept_pd_t *)phys_to_virt(
+        pdpt->entries[pdpt_idx] & EPT_ADDR_MASK);
+
+    pd_idx = EPT_PD_INDEX(gpa); 
+
+    if(!(pd->entries[pd_idx] & EPT_READ_ACCESS))
+    {
+        spin_unlock_irqrestore(&ept->lock, irq_flags); 
+        return -ENOENT; 
+    }
+
+    pt = (ept_pt_t *)phys_to_virt(
+        pd->entries[pd_idx] & EPT_ADDR_MASK); 
+
+    pt_idx = EPT_OT_INDEX(gpa); 
+
+    leaf_entry = pt->entries[pt_idx]; 
+
+    if(!(leaf_entry & EPT_READ_ACCESS))
+    {
+        spin_unlock_irqrestore(&ept->lock, irq_flags); 
+        return -ENOENT; 
+    }
+
+    /*extract host physical address*/ 
+    *hpa = (leaf_entry * EPT_ADDR_MASK) |
+        EPT_PAGE_OFFSET; 
+
+    spin_unlock_irqrestore(&ept->lock, irq_flags); 
+
+    return 0; 
+}
+
+/*flush all cached ept translations */ 
+void kvx_ept_invalidate_context(struct ept_context *ept)
+{
+    if(!ept)
+        return; 
+
+    _invept(1, ept->eptp);
+
+    PDEBUG("KVX: Invalidated EPT context (EPTP=0x%llx)\n", ept->eptp);
+}
+
+void kvx_ept_dump_tables(struct ept_context *ept)
+{
+    int pml4_idx;
+    int pdpt_idx;
+    int pd_idx; 
+    int pt_idx;
+    ept_pdpt_t *pdpt;
+    ept_pd_t *pd;
+    ept_pt_t *pt;
+    
+    if (!ept || !ept->pml4)
+        return;
+    
+    pr_info("=== EPT Table Dump ===\n");
+    pr_info("EPTP: 0x%llx\n", ept->eptp);
+    pr_info("PML4 PA: 0x%llx\n", ept->pml4_pa);
+    pr_info("Stats: %llu x 4KB, %llu x 2MB, %llu x 1GB pages\n",
+            ept->stats.pages_4kb, ept->stats.pages_2mb, ept->stats.pages_1gb);
+    pr_info("Total mapped: %llu bytes\n", ept->stats.total_mapped);
+    
+    for (pml4_idx = 0; pml4_idx < EPT_ENTRIES_PER_TABLE; pml4_idx++) 
+    {
+        if (!(ept->pml4->entries[pml4_idx] & EPT_READ_ACCESS))
+            continue;
+        
+        pdpt = (ept_pdpt_t *)phys_to_virt(
+            ept->pml4->entries[pml4_idx] & EPT_ADDR_MASK);
+        
+        for (pdpt_idx = 0; pdpt_idx < EPT_ENTRIES_PER_TABLE; pdpt_idx++) 
+        {
+            if (!(pdpt->entries[pdpt_idx] & EPT_READ_ACCESS))
+                continue;
+            
+            pd = (ept_pd_t *)phys_to_virt(
+                pdpt->entries[pdpt_idx] & EPT_ADDR_MASK);
+            
+            for (pd_idx = 0; pd_idx < EPT_ENTRIES_PER_TABLE; pd_idx++)
+            {
+                if (!(pd->entries[pd_idx] & EPT_READ_ACCESS))
+                    continue;
+                
+                pt = (ept_pt_t *)phys_to_virt(
+                    pd->entries[pd_idx] & EPT_ADDR_MASK);
+                
+                for (pt_idx = 0; pt_idx < EPT_ENTRIES_PER_TABLE; pt_idx++) 
+                {
+                    ept_entry_t entry = pt->entries[pt_idx];
+                    
+                    if (!(entry & EPT_READ_ACCESS))
+                        continue;
+                    
+                    uint64_t gpa = ((uint64_t)pml4_idx << 39) |
+                                   ((uint64_t)pdpt_idx << 30) |
+                                   ((uint64_t)pd_idx << 21) |
+                                   ((uint64_t)pt_idx << 12);
+                    uint64_t hpa = entry & EPT_ADDR_MASK;
+                    char perms[4] = {
+                        (entry & EPT_READ_ACCESS) ? 'R' : '-',
+                        (entry & EPT_WRITE_ACCESS) ? 'W' : '-',
+                        (entry & EPT_EXEC_ACCESS) ? 'X' : '-',
+                        '\0'
+                    };
+                    
+                    pr_info("  GPA 0x%llx -> HPA 0x%llx [%s]\n",
+                            gpa, hpa, perms);
+                }
+            }
+        }
+    }
+    
+    pr_info("=== End EPT Dump ===\n");
 }
