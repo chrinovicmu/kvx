@@ -4,8 +4,9 @@
 #include <linux/types.h>
 #include <linux/spinlock.h>
 
-#include "vmx_ops.h"
-#include "vmcs.h"
+#include <vmx_ops.h>
+#include <vmcs.h>
+#include <ept.h> 
 
 #define KVX_MAX_MANAGED_MSRS 8 
 
@@ -36,7 +37,7 @@ struct vcpu {
     struct kvx_vm *vm;
     struct host_cpu *hcpu;
 
-    int vpid;
+    uint16_t vpid;
     int target_cpu_id;  
 
     int launched; 
@@ -55,6 +56,8 @@ struct vcpu {
     uint64_t vmcs_pa;
 
     struct vmx_exec_ctrls controls; 
+
+    struct ept_context *ept;  
 
     void *msr_bitmap;
     uint64_t msr_bitmap_pa; 
@@ -113,4 +116,8 @@ int kvx_vcpu_pin_to_cpu(struct vcpu *vcpu, int target_cpu_id);
 void kvx_vcpu_unpin_and_stop(struct vcpu *vcpu);
 void kvx_free_vcpu(struct vcpu *vcpu);
 int kvx_init_vmcs_state(struct vcpu *vcpu); 
+int kvx_vcpu_setup_ept(struct vcpu *vcpu); 
+int kvx_vcpu_map_guest_memory(struct vcpu *vcpu, uint64_t guest_ram_size); 
+int kvx_vcpu_handle_ept_violation(struct vcpu *vcpu); 
+int kvx_vcpu_handle_ept_misconfiguration(struct vcpu *vcpu); 
 #endif /* VMX_H */

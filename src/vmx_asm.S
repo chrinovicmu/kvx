@@ -48,14 +48,12 @@ kvx_vmentry_asm:
     mov VCPU_R8(%rdi),  %r8
     mov VCPU_R9(%rdi),  %r9
 
-    /*skip r10 for now, as it contains launcher condition */ 
     mov VCPU_R11(%rdi), %r11
     mov VCPU_R12(%rdi), %r12
     mov VCPU_R13(%rdi), %r13
     mov VCPU_R14(%rdi), %r14
     mov VCPU_R15(%rdi), %r15
 
-    /*check launched flag before overwrite */ 
     test %r10, %r10 
     mov VCPU_R10(%rdi), %r10 
 

@@ -5,7 +5,7 @@
 
 #define KVX_MAX_VCPUS 1  
 #define GUEST_STACK_ORDER 2 
-#define KVX_VM_RAM_SIZE 128 * 1024 * 1024 
+#define KVX_VM_GUEST_RAM_SIZE 128 * 1024 * 1024 
     
 /*represents a single virtual machine */ 
 

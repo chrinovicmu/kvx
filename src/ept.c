@@ -77,7 +77,7 @@ struct ept_context *kvx_ept_context_create(void)
     /*A/D flags disabled for now */ 
     ept->ad_enabled = false; 
 
-    ept->eptp = CONSTRUCT_EPTP(ept->pml4_pa, ept->memtype, ept->enable_ad); 
+    ept->eptp = CONSTRUCT_EPTP(ept->pml4_pa, ept->memtype, ept->ad_enabled); 
 
     memset(&ept->stats, 0, sizeof(ept->stats)); 
 

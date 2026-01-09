@@ -1,3 +1,4 @@
+#include <cerrno>
 #include <linux/slab.h>
 #include <linux/gfp.h>
 #include <linux/mm.h>
@@ -13,9 +14,12 @@
 #include <asm/msr.h>
 #include <asm/io.h> 
 
+#include <stdint.h>
+#include <string.h>
 #include <vmx.h>
 #include <vmcs.h>
 #include <vmx_ops.h>
+#include <ept.h> 
 #include <utils.h>
 
 static int kvx_setup_vmxon_region(struct host_cpu *hcpu);
@@ -786,6 +790,141 @@ int kvx_setup_exec_controls(struct vcpu *vcpu)
 
 }
 
+int kvx_vcpu_setup_ept(struct vcpu *vcpu)
+{
+    if(!vcpu)
+        return -EINVAL; 
+
+    if(!kvx_ept_check_support())
+    {
+        pr_err("KVX: EPT not supported on this CPU\n"); 
+        return -ENOTSUP; 
+    }
+
+    if(!kvx_vcpu_ept_enabled(vcpu))
+    {
+        pr_err("KVX: EPT not enabled in execution controls\n"); 
+        return -EINVAL; 
+    }
+
+    vcpu->ept = kvx_ept_context_create(); 
+    if(IS_ERR(vcpu->ept))
+    {
+        int err = PTR_ERR(vcpu->ept); 
+        vcpu->ept = NULL; 
+        pr_err("KVX: Failed to create EPT context: %d\n"); 
+        return err; 
+    }
+
+    CHECK_VMWRITE(EPT_POINTER, vcpu->ept->eptp); 
+
+    pr_info("KVX: EPT setup complete for VCPU %d (EPTP=0x%llx)\n", 
+            vcpu->vpid, vcpu->ept->eptp); 
+
+    return 0; 
+}
+
+int kvx_vcpu_map_guest_memory(struct vcpu *vcpu, int guest_ram_size)
+{
+    uint64_t num_pages; 
+    uint64_t i; 
+    struct page *page; 
+    uint64_t gpa;
+    uint64_t hpa;
+    int ret; 
+    
+    if(!vcpu || !vcpu->ept)
+        return -EINVAL; 
+
+    guest_ram_size = PAGE_ALIGN(guest_ram_size); 
+    num_pages = guest_ram_size / PAGE_SIZE;
+
+    pr_info("KVX: Allocating %llu pages (%llu MB) for guest RAM...\n",
+            num_pages, guest_ram_size / (1024 * 1024));
+
+    for(i = 0; i < num_pages; i++)
+    {
+        page = alloc_page(GFP_KERNEL | __GFP_ZERO); 
+        if(!page)
+        {
+            pr_err("KVX: Faield to allocate page %llu/%llu\n", 
+                   i + 1, num_pages); 
+            return -ENOMEM; 
+        }
+
+        gpa = i * PAGE_SIZE; 
+        hpa = page_to_phys(page); 
+
+        ret = kvx_ept_map_page(vcpu->ept, gpa, hpa, EPT_RWX); 
+        if(ret < 0)
+        {
+            pr_err("KVX: Failed to map page %llu (GPA=0x%llx)\n", i, gpa);
+            __free_page(page); 
+            return ret; 
+        }
+
+        /*progress inddicato every 256MB */ 
+        if(i > 0 && (i %(256 * 1024 * 1024 / PAGE_SIZE)) == 0)
+        {
+            pr_info("KVX: Mapped %llu MB..\n". 
+                    (i * PAGE_SIZE / (1024 * 1024)); 
+        }
+    }
+
+    pr_info("guest mempry mapped complete\n"); 
+
+    kvx_ept_invalidate_context(vcpu->ept); 
+
+    return 0; 
+}
+
+int kvx_vcpu_handle_ept_violation(struct vcpu *vcpu)
+{
+    uint64_t exit_qualification;
+    uint64_t gpa; 
+    bool data_read; 
+    bool data_write; 
+    bool instr_fetch;
+    bool ept_present; 
+
+    exit_qualification = __vmread(EXIT_QUALIFICATION); 
+    gpa = __vmread(GUEST_PHYSICAL_ADDRESS); 
+
+    data_read = exit_qualification & (1ULL << 0);
+    data_write = exit_qualification & (1ULL << 1);
+    instr_fetch = exit_qualification & (1ULL << 2);
+    ept_present = exit_qualification & (1ULL << 3);
+    
+    pr_err("KVX: EPT violation at GPA 0x%llx\n", gpa);
+    pr_err("  Access type: %s%s%s\n",
+           data_read ? "Read " : "",
+           data_write ? "Write " : "",
+           instr_fetch ? "Exec " : "");
+    pr_err("  EPT entry: %s\n",
+           ept_present ? "Present (permission violation)" : "Not present");
+    pr_err("  Guest RIP: 0x%llx\n", __vmread(GUEST_RIP));
+   
+    /*treat EPT violations as fatat for now */ 
+    return -EFAULT; 
+}
+
+int kvx_vcpu_handle_ept_misconfig(struct vcpu *vcpu)
+{
+    uint64_t gpa; 
+    gpa = __vmread(GUEST_PHYSICAL_ADDRESS); 
+
+    pr_err("KVX: EPT misconfiguration at GPA 0x%llx\n", gpa);
+    pr_err("  Guest RIP: 0x%llx\n", __vmread(GUEST_RIP));
+    pr_err("  This indicates a bug in EPT setup code!\n");
+    
+    if(vcpu->ept)
+        kvx_ept_dump_tables(vcpu->ept); 
+
+    return -EFAULT; 
+
+}
+
+
 struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vpid)
 {
     if(!vm)
@@ -883,10 +1022,33 @@ struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vpid)
         goto _out_free_msr_bitmap; 
     }
 
+    if(vcpu->controls->secondary_proc & VMCS_PROC2_ENABLE_EPT)
+    {
+        ret = kvx_vpcu_setup_ept(vcpu); 
+        if(ret < 0)
+        {
+            pr_err("KVX: Failed to setup EPT: %d\n", ret); 
+            goto _out_free_everthing; 
+        }
+
+        ret = kvx_vcpu_map_guest_memory(vcpu, KVX_VM_GUEST_RAM_SIZE);
+        if(ret < 0)
+        {
+            pr_err("KVX: Failed to map guest memory: %d\n", ret); 
+            goto _out_free_ept; 
+        }
+    }
+
     pr_info("VCPU %d Initialized successfuly\n", vpid); 
 
     return vcpu; 
 
+_out_free_ept:
+    if(vcpu->ept)
+    {
+        kvx_ept_context_destroy(vcpu->ept); 
+        vcpu->ept = NULL; 
+    }
 _out_free_msr_bitmap:
     kvx_free_msr_bitmap(vcpu);
 _out_free_io_bitmap:
@@ -960,6 +1122,11 @@ void kvx_free_vcpu(struct vcpu *vcpu)
     kvx_free_msr_bitmap(vcpu);
     kvx_free_vmcs_region(vcpu);
     kvx_destroy_host_cpu(vcpu->hcpu); 
+    if(vcpu->ept)
+    {
+        kvx_ept_context_destroy(vcpu->ept); 
+        vcpu->ept = NULL; 
+    }
     kfree(vcpu);
 }
 
@@ -1081,6 +1248,7 @@ int kvx_init_vmcs_state(struct vcpu *vcpu)
 
 }
 
+
 void kvx_dump_vcpu(struct vcpu *vcpu)
 {
     pr_info("\n*** Guest State ***\n\n");     
@@ -1126,7 +1294,7 @@ void kvx_dump_vcpu(struct vcpu *vcpu)
             (unsigned long)__vmread(GUEST_SYSENTER_CS), 
             (unsigned long)(__vmread(GUEST_SYSENTER_EIP) & 0xFFFFFFFF)); 
     
-/*    
+   
     pr_info("\n*** Host State ***\n\n");
 
     pr_info("RIP = 0x%016llx (%ps)  RSP = 0x%016llx\n",
@@ -1174,5 +1342,5 @@ void kvx_dump_vcpu(struct vcpu *vcpu)
         pr_info("PerfGlobalCtrl=0x%016llx\n",
             __vmread(HOST_PERF_GLOBAL_CTRL));
     }
-*/ 
+ 
 }
