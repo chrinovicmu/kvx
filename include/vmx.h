@@ -8,7 +8,13 @@
 #include <vmcs.h>
 #include <ept.h> 
 
+#define VPID_TO_INDEX(vpid) ((vpid) -1)
+#define INDEX_TO_VPID(index) ((index) + 1)
+#define VPID_IS_VALID(vpid, max) \
+    ((vpid) > 0 && (vpid) <= (max))
+
 #define KVX_MAX_MANAGED_MSRS 8 
+
 
 struct kvx_vm;  // forward declaration
 

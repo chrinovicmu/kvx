@@ -292,10 +292,18 @@ int kvx_vm_copy_to_guest(struct kvx_vm *vm, int gpa, const void *data, int size)
  * @target_host_cpu: The logical ID of the host CPU to pin to.
  * * Returns 0 on success, < 0 on failure.
  */
-int kvx_vm_add_vcpu(struct kvx_vm *vm, int vcpu_id)
+int kvx_vm_add_vcpu(struct kvx_vm *vm, int vpid)
 {
     struct vcpu *vcpu; 
-    int ret = 0; 
+    int index; 
+    int ret;
+
+    if(!vm)
+    {
+        pr_err("KVX: Invalid VM\n")
+        return -EINVAL;
+    }
+    if(!VPID_IS_VALID(vpid, vm->max_vcpus))
 
     spin_lock(&vm->lock); 
 
@@ -337,9 +345,20 @@ _unlock_vm:
 static int kvx_vcpu_loop(void *data)
 {
     struct vcpu *vcpu = (struct vcpu*)data; 
+    int ret; 
+    int vm_entry_status; 
+
+    pr_info("KVX: VCPU %d thread starting on CPU %d\n", 
+            vcpu->vpid, smp_procerror_id(); 
 
     /*secure context: pin to specific CPU assigned during 'add_cpu' */ 
-    kvx_vcpu_pin_to_cpu(vcpu, vcpu->target_cpu_id); 
+    ret = kvx_vcpu_pin_to_cpu(vcpu, vcpu->target_cpu_id); 
+    if(ret < 0)
+    {
+        pr_err("KVX: Failed to pin VCPU %D to CPU %d\n", 
+               vcpu->vpid, vcpu->target_cpu_id); 
+        return ret; 
+    }
 
     /*acitvate hardware: load the vmcs on this specific core */
     if(_vmptrld(vcpu->vmcs_pa))
