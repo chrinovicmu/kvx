@@ -18,6 +18,16 @@
 
 struct kvx_vm;  // forward declaration
 
+struct vcpu_stats
+{
+    uint64_t total_exits; 
+    uint64_t hypercalls; 
+    uint64_t hlt_exits;
+    uint64_t cpuid_exits;
+    uint64_t start_time_ns; 
+    uint64_t end_time_ns; 
+
+}; 
 /* Guest registers */
 struct guest_regs {
     unsigned long rax, rbx, rcx, rdx;
@@ -25,7 +35,7 @@ struct guest_regs {
     unsigned long rip, rsp;
     unsigned long rflags;
     unsigned long cs, ds, es, fs, gs, ss;
-};
+}__attribute__((packed));
 
 enum vcpu_state {
     VCPU_STATE_UNINITIALIZED, 
@@ -100,6 +110,8 @@ struct vcpu {
 
     uint64_t exit_reason;
     uint64_t exit_qualification;
+
+    vcpu_stats stats; 
 
 };
 

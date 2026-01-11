@@ -1,16 +1,22 @@
 #include <cerrno>
+#include <cstddef>
 #include <linux/kthread.h> 
 #include <linux/sched.h>
 #include <linux/smp.h>
 #include <linux/slab.h>     
 #include <linux/vmalloc.h> 
-#include <stddef.h>
 #include <stdint.h>
 #include <vmx.h>
 #include <vm.h>
+#include <ept.h> 
 #include <utils.h>
 
-extern void kvx_vmentry_asm(struct guest_regs, int launched); 
+/*per-CPU varaible holding the currently executing vcpu. 
+ * allows handle_vmesit to find VCPU structure wuthout passing  
+ * it as a parameter*/
+extern int kvx_vmentry_asm(struct vcpu_regs *regs, int launched);
+extern void kvx_vmexit_handler(void);
+
 
 static u64 kvx_op_get_uptime(struct kvx_vm *vm)
 {
@@ -303,28 +309,30 @@ int kvx_vm_add_vcpu(struct kvx_vm *vm, int vpid)
         pr_err("KVX: Invalid VM\n")
         return -EINVAL;
     }
+
     if(!VPID_IS_VALID(vpid, vm->max_vcpus))
-
-    spin_lock(&vm->lock); 
-
-    /*checking against 0 becasue the vcpu_id 0 
-     * is reserved for the host if vpid used 
-     * */ 
-    if(vcpu_id <= 0 || vcpu_id >= vm->max_vcpus || vm->vcpus[vcpu_id] != NULL)
     {
-        pr_err("KVX: Invalid or already existing VCPU ID %d.\n", vcpu_id); 
-        ret = -EINVAL; 
-        goto _unlock_vm; 
+        pr_err("KVX: Invalid VPID (must be < max_vcpus)");
+        return -EINVAL; 
     }
+
+    index = VPID_TO_INDEX(vpid); 
+    if(vm->vcpu[index])
+    {
+        pr_err("KVX: VCPU with VPID %u alredy exists\n", vpid); 
+        return -EEXIST; 
+    }
+
+    pr_info("KVX: Creating VCPU with VPID %u\n", vpid); 
 
     /*allocate and initilize struct vcpu */ 
-    vcpu = kvx_vcpu_alloc_init(vm, vcpu_id); 
+    vcpu = kvx_vcpu_alloc_init(vm, vpid);
     if(!vcpu)
     {
-        ret = -ENOMEM; 
-        goto _unlock_vm; 
+        pr_err("KVX: Failed to allocate VCPU\n");
+        return -ENOMEM; 
     }
-
+    
     /*store vcpu in the VM 's array */ 
     vm->vcpus[vcpu_id] = vcpu; 
 
@@ -337,11 +345,29 @@ int kvx_vm_add_vcpu(struct kvx_vm *vm, int vpid)
     PDEBUG("KVX: VCPU %d for VM %d successfully pinned to Host CPU %d", 
            vcpu_id, vm->vm_id, vcpu->target_cpu_id);
 
-_unlock_vm: 
-    spin_unlock(&vm->lock); 
-    return ret; 
+    return 0; 
 }
 
+struct vcpu *kvx_vm_get_vcpu(struct kvx_vm *vm, uint16_t vpid)
+{
+    struct vcpu *vcpu = NULL; 
+
+    if(!vm || !vm->vcpus)
+        return NULL; 
+
+    if(VPID_IS_VALID(vpid, vm->max_vcpus)) 
+        return NULL; 
+
+    index = VPID_TO_INDEX(vpid); 
+
+    spin_lock(&vm->lock); 
+    vcpu = vm->vcpus[index]; 
+    spin_unlock(&vm->lock); 
+
+}
+/*main execution loop of VCPU
+ * this functino runs in a kernel thread and repeatedly 
+ * enters the guest runtil told to stop */
 static int kvx_vcpu_loop(void *data)
 {
     struct vcpu *vcpu = (struct vcpu*)data; 
@@ -363,39 +389,152 @@ static int kvx_vcpu_loop(void *data)
     /*acitvate hardware: load the vmcs on this specific core */
     if(_vmptrld(vcpu->vmcs_pa))
     {
-        pr_err("KVX: VMPTRLD failed on CPU %d\n", vcpu->target_cpu_id); 
-        return -1; 
+        pr_err("KVX: VMPTRLD failed for VCPU %d on CPU %d\n", 
+               vcpu->vpid, vcpu->target_cpu_id); 
+        return -EIO; 
     }
 
-    if(kvx_init_vmcs_state(vcpu))
-        return -1; 
+    pr_info("KVX: VMCS loaded for VCPU %d (PA=0x%llx)\n",
+            vcpu->vpid, vcpu->vmcs_pa);
+
+    ret = kvx_init_vmcs_state(vcpu);
+    if(ret < 0)
+    {
+        pr_err("KVX: Failed to initilize VMCS state\n"); 
+        __vmclear(vcpu->vmcs_pa); 
+        return ret 
+    }
+
+    vcpu->state = VCPU_STATE_RUNNING; 
+    pr_info("KVX: VCPU %d entering execution loop\n", vcpu->vpid);
 
 
     while(!kthread_should_stop())
     {
-        kvx_vmentry_asm(vcpu->regs, vcpu->launched); 
+        ret = kvx_vmentry_asm(&vcpu->regs, vcpu->launched);
 
-        /*if we are here, it means:
-        * handler_vmexit() returned 0 (requesred stop)
-        * VMLAUNCH/VregionESUME failed (hardware error)
-        */ 
-        if(vcpu->launched)
-        {
-            uint64_t error = __vregionead(VMCS_INSTRUCTION_ERROR_FIELD);
-            if(error != 0)
-            {
-                pr_err("KVX: Hardware Error: %llu\n", error); 
-                break; 
-            }
-        }
-        vcpu->launched = 1; 
+        /*we only reach here if VMLAUNCH/VMRESUME fails */ 
+        pr_err("KVX: [VPID=%u] VM-%s FAILED!\n",
+               vcpu->vpid, vcpu->launched ? "RESUME" : "LAUNCH");
+        
+        uint64_t error = __vmread(VM_INSTRUCTION_ERROR);
+        
+        pr_err("KVX: [VPID=%u] VM instruction error: %llu\n",
+               vcpu->vpid, error);
+        
+        pr_err("KVX: [VPID=%u] Guest state at failure:\n", vcpu->vpid);
+        pr_err("  RIP:    0x%016llx\n", __vmread(GUEST_RIP));
+        pr_err("  RSP:    0x%016llx\n", __vmread(GUEST_RSP));
+        pr_err("  RFLAGS: 0x%016llx\n", __vmread(GUEST_RFLAGS));
+        pr_err("  CR0:    0x%016llx\n", __vmread(GUEST_CR0));
+        pr_err("  CR3:    0x%016llx\n", __vmread(GUEST_CR3));
+        pr_err("  CR4:    0x%016llx\n", __vmread(GUEST_CR4));
+        
+        pr_err("KVX: [VPID=%u] Dumping VMCS for analysis:\n", vcpu->vpid);
+        kvx_dump_vcpu(vcpu);
+        
+        break;
+
     }
 
+    pr_info("KVX: [VPID=%u] Execution loop exiting\n", vcpu->vpid);
+    pr_info("KVX: [VPID=%u] Total VM-exits handled: %llu\n",
+            vcpu->vpid, vcpu->stats.total_exits);
+
+    if(vcpu->state == VCPU_STATE_RUNNING)
+        vcpu->state == VCPU_STATE_STOPPED; 
+
+    kvx_set_current_vcpu(NULL); 
     __vmclear(vcpu->vmcs_pa); 
+
+    pr_info("KVX: [VPID=%u] Thread exiting\n", vcpu->vpid)
     return 0; 
 }
 
-int kvx_run_vm(struct kvx_vm *vm, int vcpu_id)
+int kvx_run_vcpu(struct kvx_vm *vm, uint64_t vpid)
+{
+    struct vcpu *vcpu; 
+    if(!vm)
+        return -EINVAL; 
+
+    vcpu = kvx_vm_get_vcpu(vm, vpid); 
+    if(!vcpu)
+    {
+        pr_err("KVX: VCPU VPID=%u, does not exist\n", vpid); 
+        return -ENOENT; 
+    }
+
+    if(vcpu->host_task)
+    {
+        pr_err("KVX: VCPU VPID=%u already running\n", vpid); 
+        return -EBUSY; 
+    }
+
+    vcpu->launched = 0; 
+    vcpu->halted = false; 
+    vcpu->stats.total_exits = 0; 
+    vcpu->exit_reason = 0; 
+
+    pr_info("KVX: Starting VCPU VPID=%u\n", vpid);
+
+    vcpu->host_task = kthread_create(
+        kvx_vcpu_loop,
+        vcpu, 
+        "kvx_vm%d_vpid%u",
+        vm->vm_id,
+        vpid
+    );
+
+    if(IS_ERR(vcpu->host_task))
+    {
+        pr_err("KVX: Failed to create thread for VPID %u: %ld\n", 
+               vpid, PTR_ERR(vcpu->host_task)); 
+        vcpu->host_task = NULL; 
+        return PTR_ERR(vcpu->host_task); 
+    }
+
+    wake_up_process(vcpu->host_task); 
+
+    pr_info("KVX: VCPU VPID=%u thread started\n", vpid); 
+
+    return 0; 
+
+}
+
+int kvx_stop_vcpu(struct kvx_vm *vm, uint16_t vpid)
+{
+    struct vcpu *vcpu; 
+    int ret; 
+
+    if(!vm)
+        return -EINVAL; 
+
+    vcpu = kvx_vm_get_vcpu(vm, vpid); 
+    if(!vcpu)
+    {
+        pr_err("KVX: VCPU VPID=%u does not exist\n", vpid); 
+        return -ENOENT;
+    }
+
+    if(!vcpu->host_task)
+    {
+        pr_warn("KVX: VCPU VPID=%u is not runnning\n", vpid); 
+        return 0; 
+    }
+
+    pr_info("KVX: Stopping VCPU VPID=%u...............................\n", vpid);
+    
+    ret = kthread_stop(vcpu->host_task);
+    
+    vcpu->host_task = NULL;
+    vcpu->state = VCPU_STATE_STOPPED;
+
+    pr_info("KVX: VCPU VPID=%u stopped (total exits: %ld\n", vcpu->stats.total_exits); 
+
+    return 0; 
+}
+
+int kvx_run_vm(struct kvx_vm *vm)
 {
     struct vcpu *vcpu; 
 
