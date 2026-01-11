@@ -6,7 +6,6 @@
 #include <asm/io.h>
 #include <asm/msr.h>
 
-#include <stdint.h>
 #include <vmx.h>
 #include <ept.h>
 #include <vmx_ops.h>

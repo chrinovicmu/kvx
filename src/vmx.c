@@ -1,4 +1,3 @@
-#include <cerrno>
 #include <linux/slab.h>
 #include <linux/gfp.h>
 #include <linux/mm.h>
@@ -14,8 +13,6 @@
 #include <asm/msr.h>
 #include <asm/io.h> 
 
-#include <stdint.h>
-#include <string.h>
 #include <vmx.h>
 #include <vmcs.h>
 #include <vmx_ops.h>

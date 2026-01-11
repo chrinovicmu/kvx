@@ -1,11 +1,8 @@
-#include <cerrno>
-#include <cstddef>
 #include <linux/kthread.h>
 #include <linux/sched.h>
 #include <linux/smp.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
-#include <stdint.h>
 #include <vmx.h>
 #include <vm.h>
 #include <ept.h>
@@ -29,23 +26,55 @@ struct vcpu *kvx_get_current_vcpu(void)
 extern int kvx_vmentry_asm(struct vcpu_regs *regs, int launched);
 extern void kvx_vmexit_handler(void);
 
+static const char * const vm_state_names[] = {
+    [VM_STATE_CREATED]    = "CREATED",
+    [VM_STATE_RUNNING]    = "RUNNING",
+    [VM_STATE_SUSPENDED]  = "SUSPENDED",
+    [VM_STATE_STOPPED]    = "STOPPED",
+}
+;
+static inline const char *vm_state_to_string(enum vm_state state)
+{
+    if ((unsigned int)state >= ARRAY_SIZE(vm_state_names))
+        return "UNKNOWN";
+    return vm_state_names[state] ? vm_state_names[state] : "???";
+}
+
+static inline const char *vm_state_to_string(enum vm_state state)
+{
+    if ((unsigned int)state >= ARRAY_SIZE(vm_state_names))
+        return "UNKNOWN";
+    return vm_state_names[state] ? vm_state_names[state] : "???";
+}
 static u64 kvx_op_get_uptime(struct kvx_vm *vm)
 {
+    if(!vm)
+        return; 
+
     if (!vm) return 0;
     return ktime_to_ns(ktime_get()) - vm->stats.start_time_ns;
 }
 
 static void kvx_op_print_stats(struct kvx_vm *vm)
 {
+    if(!vm)
+        return 
+
     pr_info("KVX [%s] Stats: Exits=%llu, CPUID=%llu, HLT=%llu\n",
             vm->vm_name, vm->stats.total_exits,
             vm->stats.cpuid_exits, vm->stats.hlt_exits);
 }
 
-static void kvx_op_dump_regs(struct kvx_vm *vm, int vcpu_id)
+static void kvx_op_dump_regs(struct kvx_vm *vm, int vpid)
 {
-    struct vcpu *vcpu = vm->vcpus[vcpu_id];
-    if (!vcpu) return;
+    if(!vm)
+        return; 
+
+    int index = VPID_TO_INDEX(vpid); 
+    
+    struct vcpu *vcpu = vm->vcpus[index];
+    if(!vcpu) 
+        return;
    
     pr_info("KVX [%s] VCPU %d RIP: 0x%llx RSP: 0x%llx\n",
             vm->vm_name, vcpu_id, vcpu->regs.rip, vcpu->regs.rsp);
@@ -101,6 +130,7 @@ int kvx_vm_allocate_guest_ram(struct kvx_vm *vm, uint64_t size, uint64_t gpa_sta
             ret = -ENOMEM;
             goto _cleanup;
         }
+
         region->pages[i] = page;
         gpa = gpa_start + (i * PAGE_SIZE);
         hpa = page_to_phys(page);
@@ -561,5 +591,162 @@ int kvx_stop_vcpu(struct kvx_vm *vm, uint16_t vpid)
 // Consider removing it or reimplementing properly.
 int kvx_run_vm(struct kvx_vm *vm)
 {
-    return -ENOSYS;
+    int i; 
+    int ret = 0; 
+    int started_vcpus = 0; 
+    struct vcpu *vcpu; 
+
+    if(!vm)
+    {
+        pr_err("KVX: Cannot run NULL VM\n"); 
+        return -EINVAL; 
+    }
+
+    if(vm->state != VM_STATE_INITILIZED && vm->state != VM_STATE_STOPPED) 
+    {
+        pr_err("KVX: VM '%s' is not in runnable state (current state : %s)\n",
+               vm->vm_name, 
+               vm_state_to_string(vm->state));
+        return -EINVAL; 
+    }
+
+    if (vm->online_vcpus == 0) {
+        pr_err("KVX: VM '%s' has no VCPUs configured\n", vm->vm_name);
+        return -ENOENT;
+    }
+
+    pr_info("KVX: Starting VM '%s' (ID: %d) with %d VCPU(s)\n",
+            vm->vm_name, vm->vm_id, vm->online_vcpus);
+
+
+    vm->stats.start_time_ns = ktime_to_ns(ktime_get());
+
+    spin_lock(&vm->lock);
+    vm->state = VM_STATE_RUNNING;
+    spin_unlock(&vm->lock);
+
+
+    for(i = 0; i < vm->max_vcpus; i++)
+    {
+        vcpu = vm->vcpus[i]; 
+
+        if(!vcpu){
+            continue;
+        }
+
+        if (vcpu->host_task)
+        {
+            pr_warn("KVX: VCPU VPID=%u already running, skipping\n",
+                    vcpu->vpid);
+            started_vcpus++;
+            continue;
+        }
+
+        pr_info("KVX: Launching VCPU VPID=%u (target CPU: %d)\n",
+                vcpu->vpid, vcpu->target_cpu_id);
+
+        ret = kvx_run_vcpu(vm, vcpu->vpid); 
+        if(ret < 0)
+        {
+            pr_err("KVX: Failed to start VCPU VPID=%u: %d\n", 
+                   vcpu->vpid, ret); 
+
+            goto _stop_all_vcpus; 
+        }
+
+        started_vcpus++; 
+    }
+
+    if (started_vcpus == 0) 
+    {
+        pr_err("KVX: Failed to start any VCPUs for VM '%s'\n",
+               vm->vm_name);
+        vm->state = VM_STOPPED;
+        return -EIO;
+    }
+
+    pr_info("KVX: VM '%s' successfully started with %d/%d VCPUs running\n",
+            vm->vm_name, started_vcpus, vm->online_vcpus);
+
+    return 0;
+
+_stop_all_vcpus:
+
+    pr_err("KVX: Stopping all VCPUs due to launch failure\n");
+
+    for (i = 0; i < vm->max_vcpus; i++) 
+    {
+        vcpu = vm->vcpus[i];
+        if (!vcpu || !vcpu->host_task) {
+            continue;
+        }
+
+        pr_info("KVX: Stopping VCPU VPID=%u\n", vcpu->vpid);
+        kvx_stop_vcpu(vm, vcpu->vpid);
+    }
+
+    spin_lock(&vm->lock);
+    vm->state = VM_INITIALIZED;
+    spin_unlock(&vm->lock);
+
+    return ret;
+}
+
+int kvx_stop_vm(struct kvx_vm *vm)
+{
+    int i;
+    int ret;
+    int stopped_vcpus = 0;
+    struct vcpu *vcpu;
+
+    if (!vm) 
+    {
+        pr_err("KVX: Cannot stop NULL VM\n");
+        return -EINVAL;
+    }
+
+    if (!vm->vcpus)
+    {
+        pr_warn("KVX: VM '%s' has no VCPU array\n", vm->vm_name);
+        return 0;
+    }
+
+    pr_info("KVX: Stopping VM '%s' (ID: %d)\n",
+            vm->vm_name, vm->vm_id);
+
+    for (i = 0; i < vm->max_vcpus; i++) {
+        vcpu = vm->vcpus[i];
+
+        if (!vcpu) {
+            continue;
+        }
+
+        if (!vcpu->host_task) {
+            continue;
+        }
+
+        pr_info("KVX: Stopping VCPU VPID=%u\n", vcpu->vpid);
+
+        ret = kvx_stop_vcpu(vm, vcpu->vpid);
+        if (ret < 0)
+        {
+            pr_err("KVX: Failed to stop VCPU VPID=%u: %d\n",
+                   vcpu->vpid, ret);
+        } else {
+            stopped_vcpus++;
+        }
+    }
+
+    spin_lock(&vm->lock);
+    vm->state = VM_STOPPED;
+    spin_unlock(&vm->lock);
+
+    pr_info("KVX: VM '%s' stopped (%d VCPUs stopped)\n",
+            vm->vm_name, stopped_vcpus);
+
+    if (vm->ops && vm->ops->print_stats) {
+        vm->ops->print_stats(vm);
+    }
+
+    return 0;
 }
