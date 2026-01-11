@@ -272,10 +272,8 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
 
             /*TODO: implement hypercall
             * advance RIP for now*/
-
             instr_len = __vmread(VM_EXIT_INSTRUCTION_LEN);
-            __vmwrite(GUEST_RIP, guest_rip + instr_len);
-            
+            __vmwrite(GUEST_RIP, guest_rip + instr_len);        
             return 1;
 
         case EXIT_REASON_MSR_READ:
@@ -285,7 +283,8 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
             pr_info("KVX: [VPID=%u] RDMSR 0x%x at RIP=0x%llx\n",
                     vcpu->vpid, msr, guest_rip);
 
-            /*return 0 for now */ 
+            /*TODO:emulate MSR_READ
+             * pass 0 for now*/ 
             guest_regs->rax = 0;
             guest_regs->rdx = 0;
             vcpu->regs.rax = 0;
@@ -293,9 +292,7 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
             
             instr_len = __vmread(VM_EXIT_INSTRUCTION_LEN);
             __vmwrite(GUEST_RIP, guest_rip + instr_len);
-            
             return 1;
-
 
         case EXIT_REASON_MSR_WRITE:{
 
@@ -305,8 +302,8 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
             pr_info("KVX: [VPID=%u] WRMSR 0x%x = 0x%llx at RIP=0x%llx\n",
                     vcpu->vpid, msr, value, guest_rip);
             
-            /*ignore the write for now*/ 
-            
+            /*TODO: emulate MSR write
+             * advance RIP for now*/ 
             instr_len = __vmread(VM_EXIT_INSTRUCTION_LEN);
             __vmwrite(GUEST_RIP, guest_rip + instr_len);
             
