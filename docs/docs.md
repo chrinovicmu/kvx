@@ -1,12 +1,12 @@
-# KVX Hypervisor Technical Documentation
+# Relm Hypervisor Technical Documentation
 
 ## Structure and Design
 
-KVX is a Type-1 hypervisor integrated directly into the Linux kernel. It utilizes a VCPU-per-Kthread model, where each virtual processor is managed as a standard Linux task, allowing the host scheduler to manage CPU affinity while the hypervisor maintains hardware control.
+Relm is a Type-1 hypervisor integrated directly into the Linux kernel. It utilizes a VCPU-per-Kthread model, where each virtual processor is managed as a standard Linux task, allowing the host scheduler to manage CPU affinity while the hypervisor maintains hardware control.
 
 ## CPU Virtualization
 
-Based on Intel VT-x hardware acceleration, KVX emulates virtual CPUs (vCPUs) with the following architectural features:
+Based on Intel VT-x hardware acceleration, Relm emulates virtual CPUs (vCPUs) with the following architectural features:
 
 * **Processor Affinity**: Each vCPU is dedicated and pinned to a specific physical core to minimize cache thrashing and VM-exit overhead.
 * **Execution Loop**: Every vCPU runs a high-priority kernel thread that manages the transition between Host and Guest modes via a custom assembly "trampoline."
@@ -29,8 +29,8 @@ The vCPU lifecycle is managed through a state machine that tracks the transition
 
 ## Memory Architecture
 
-KVX implements a simplified memory model to ensure guest isolation:
+Relm implements a simplified memory model to ensure guest isolation:
 
 * **Guest RAM**: Allocated as a contiguous block in the Host Virtual Address space using `vmalloc`.
 * **Stack Initialization**: The Guest `RSP` is automatically mapped to the top of the allocated RAM block, growing downwards toward the Guest `RIP` at address `0x0`.
-* **Instruction Interception**: Utilizing the Exception Bitmap, KVX traps specific events (like Page Faults or Invalid Opcodes) to maintain control over the execution environment.
+* **Instruction Interception**: Utilizing the Exception Bitmap, Relm traps specific events (like Page Faults or Invalid Opcodes) to maintain control over the execution environment.

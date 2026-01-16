@@ -56,7 +56,7 @@ static void* kzalloc_aligned(size_t size, size_t align, gfp_t flags)
 static bool check_cap(const char *name, unsigned long expected, unsigned long got)
 {
     if (got != expected)
-        pr_info("KVX %s: got %#lx expected %#lx\n", name, got, expected);
+        pr_info("RELM %s: got %#lx expected %#lx\n", name, got, expected);
 
     return got != expected;
 }

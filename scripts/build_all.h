@@ -2,7 +2,7 @@
 #!/bin/sh
 set -e
 
-MODULE_NAME="kvx"
+MODULE_NAME="relm"
 
 # Resolve repo root (script may be invoked from anywhere)
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"

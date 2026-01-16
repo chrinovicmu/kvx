@@ -1,4 +1,4 @@
-MODULE_NAME := kvx
+MODULE_NAME := relm
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)

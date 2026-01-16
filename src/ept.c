@@ -30,7 +30,7 @@ static inline void _invept(uint64_t type, uint64_t eptp)
     ); 
 }
 
-bool kvx_ept_check_support(void)
+bool relm_ept_check_support(void)
 {
     uint64_t ept_vpid_cap; 
 
@@ -38,71 +38,71 @@ bool kvx_ept_check_support(void)
 
     if(!(ept_vpid_cap & EPT_CAP_PAGE_WALK_4))
     {
-        pr_err("KVX: EPT 4-level page walk not supported\n"); 
+        pr_err("RELM: EPT 4-level page walk not supported\n"); 
         return false; 
     }
 
     if(!(ept_vpid_cap & EPT_CAP_MEMTYPE_WB))
     {
-        pr_err("KVX: EPT write-back memory type not supported\n"); 
+        pr_err("RELM: EPT write-back memory type not supported\n"); 
         return false; 
     }
 
     if(!(ept_vpid_cap & EPT_CAP_INVEPT))
     {
-        pr_err("KVX: INVEPT instruction not supported\n"); 
+        pr_err("RELM: INVEPT instruction not supported\n"); 
         return false; 
     }
 
-    pr_info("KVX: EPT support verified\n"); 
+    pr_info("RELM: EPT support verified\n"); 
 
     if (ept_vpid_cap & EPT_CAP_2MB_PAGES)
-        pr_info("KVX: EPT 2MB large pages supported\n");
+        pr_info("RELM: EPT 2MB large pages supported\n");
     
     if (ept_vpid_cap & EPT_CAP_1GB_PAGES)
-        pr_info("KVX: EPT 1GB large pages supported\n");
+        pr_info("RELM: EPT 1GB large pages supported\n");
         
     if (ept_vpid_cap & EPT_CAP_AD_FLAGS)
-        pr_info("KVX: EPT accessed/dirty flags supported\n");
+        pr_info("RELM: EPT accessed/dirty flags supported\n");
     
     return true;
 }
 
-int kvx_setup_ept(struct vcpu *vcpu)
+int relm_setup_ept(struct vcpu *vcpu)
 {
     if(!vcpu)
         return -EINVAL; 
 
-    if(!kvx_ept_check_support())
+    if(!relm_ept_check_support())
     {
-        pr_err("KVX: EPT not supported on this CPU\n"); 
+        pr_err("RELM: EPT not supported on this CPU\n"); 
         return -ENOTSUPP; 
     }
 
-    if(!kvx_ept_enabled(vcpu))
+    if(!relm_ept_enabled(vcpu))
     {
-        pr_err("KVX: EPT not enabled in execution controls\n"); 
+        pr_err("RELM: EPT not enabled in execution controls\n"); 
         return -EINVAL; 
     }
 
-    vcpu->ept = kvx_ept_context_create(); 
+    vcpu->ept = relm_ept_context_create(); 
     if(IS_ERR(vcpu->ept))
     {
         int err = PTR_ERR(vcpu->ept); 
         vcpu->ept = NULL; 
-        pr_err("KVX: Failed to create EPT context: %d\n"); 
+        pr_err("RELM: Failed to create EPT context: %d\n"); 
         return err; 
     }
 
     CHECK_VMWRITE(EPT_POINTER, vcpu->ept->eptp); 
 
-    pr_info("KVX: EPT setup complete for VCPU %d (EPTP=0x%llx)\n", 
+    pr_info("RELM: EPT setup complete for VCPU %d (EPTP=0x%llx)\n", 
             vcpu->vpid, vcpu->ept->eptp); 
 
     return 0; 
 }
 
-int kvx_handle_ept_violation(struct vcpu *vcpu)
+int relm_handle_ept_violation(struct vcpu *vcpu)
 {
     uint64_t exit_qualification;
     uint64_t gpa; 
@@ -119,7 +119,7 @@ int kvx_handle_ept_violation(struct vcpu *vcpu)
     instr_fetch = exit_qualification & (1ULL << 2);
     ept_present = exit_qualification & (1ULL << 3);
     
-    pr_err("KVX: EPT violation at GPA 0x%llx\n", gpa);
+    pr_err("RELM: EPT violation at GPA 0x%llx\n", gpa);
     pr_err("  Access type: %s%s%s\n",
            data_read ? "Read " : "",
            data_write ? "Write " : "",
@@ -132,31 +132,31 @@ int kvx_handle_ept_violation(struct vcpu *vcpu)
     return -EFAULT; 
 }
 
-int kvx_vcpu_handle_ept_misconfig(struct vcpu *vcpu)
+int relm_vcpu_handle_ept_misconfig(struct vcpu *vcpu)
 {
     uint64_t gpa; 
     gpa = __vmread(GUEST_PHYSICAL_ADDRESS); 
 
-    pr_err("KVX: EPT misconfiguration at GPA 0x%llx\n", gpa);
+    pr_err("RELM: EPT misconfiguration at GPA 0x%llx\n", gpa);
     pr_err("  Guest RIP: 0x%llx\n", __vmread(GUEST_RIP));
     pr_err("  This indicates a bug in EPT setup code!\n");
     
     if(vcpu->ept)
-        kvx_ept_dump_tables(vcpu->ept); 
+        relm_ept_dump_tables(vcpu->ept); 
 
     return -EFAULT; 
 
 }
 
 
-struct ept_context *kvx_ept_context_create(void)
+struct ept_context *relm_ept_context_create(void)
 {
     struct ept_context *ept; 
 
     ept = kzalloc(sizeof(*ept), GFP_KERNEL); 
     if(!ept)
     {
-        pr_err("KVX: Failed to allocate EPT context\n"); 
+        pr_err("RELM: Failed to allocate EPT context\n"); 
         return ERR_PTR(-ENOMEM); 
     }
 
@@ -164,7 +164,7 @@ struct ept_context *kvx_ept_context_create(void)
     ept->pml4 = (ept_pml4_t *)__get_free_page(GFP_KERNEL | __GFP_ZERO); 
     if(!ept->pml4)
     {
-        pr_err("KVX: Failed to allocate EPT PML4 table\n"); 
+        pr_err("RELM: Failed to allocate EPT PML4 table\n"); 
         kfree(ept); 
         return ERR_PTR(-ENOMEM); 
     }
@@ -181,13 +181,13 @@ struct ept_context *kvx_ept_context_create(void)
 
     spin_lock_init(&ept->lock); 
 
-    pr_info("KVX : EPT context created, PML4 PA=0x%llx, EPTP=0x%llx\n", 
+    pr_info("RELM : EPT context created, PML4 PA=0x%llx, EPTP=0x%llx\n", 
             ept->pml4_pa, ept->eptp); 
 
     return ept; 
 }
 
-static void kvx_ept_free_table(void *table_va, int level)
+static void relm_ept_free_table(void *table_va, int level)
 {
     ept_entry_t *entries = (ept_entry_t *)table_va; 
     int i; 
@@ -214,43 +214,43 @@ static void kvx_ept_free_table(void *table_va, int level)
 
         void *child_va = phys_to_virt(child_pa); 
 
-        kvx_ept_free_table(child_va, level, -1); 
+        relm_ept_free_table(child_va, level, -1); 
     }
 
     free_page((unsigned)table_va);
 }
 
-void kvx_ept_context_destroy(struct ept_context *ept)
+void relm_ept_context_destroy(struct ept_context *ept)
 {
     if(!ept)
         return; 
 
     if(ept->pml4)
     {
-        kvx_ept_free_table(ept->pml4, 4); 
+        relm_ept_free_table(ept->pml4, 4); 
         ept->pml4 = NULL; 
         ept->pml4_pa = 0; 
     }
 
-    pr_info("KVX: EPT context destroyed (mapped %llu bytes)\n", 
+    pr_info("RELM: EPT context destroyed (mapped %llu bytes)\n", 
             ept->stats.total_mapped); 
 
     kfree(ept); 
 }
 
-static inline void *kvx_ept_alloc_table(void)
+static inline void *relm_ept_alloc_table(void)
 {
     void *table = (void *)__get_free_page(GFP_KERNEL | __GFP_ZERO); 
     if(_unlikely(!table)
     {
-        pr_err("KVX: Failed to alloc EPT table\n");
+        pr_err("RELM: Failed to alloc EPT table\n");
         return NULL; 
     }
 
     return table; 
 }
 
-static void *kvx_ept_get_or_create_table(ept_entry_t *entry_ptr, int level)
+static void *relm_ept_get_or_create_table(ept_entry_t *entry_ptr, int level)
 {
     ept_entry_t entry = *entry_ptr; 
     void *table_va; 
@@ -261,7 +261,7 @@ static void *kvx_ept_get_or_create_table(ept_entry_t *entry_ptr, int level)
         table_pa = entry & EPT_ADDR_MASK; 
     }
 
-    table_va = kvx_ept_alloc_table(); 
+    table_va = relm_ept_alloc_table(); 
     if(!table_va)
         return NULL; 
 
@@ -274,7 +274,7 @@ static void *kvx_ept_get_or_create_table(ept_entry_t *entry_ptr, int level)
     return table_va; 
 }
 
-int kvx_ept_map_page(struct ept_context *ept, uint64_t gpa, 
+int relm_ept_map_page(struct ept_context *ept, uint64_t gpa, 
                      uint64_t hpa, uint64_t flags) 
 {
     ept_pdpt_t *pdpt; 
@@ -285,14 +285,14 @@ int kvx_ept_map_page(struct ept_context *ept, uint64_t gpa,
 
     if(!ept || !ept->pml4)
     {
-        pr_err("KVX: Invalid EPT context\n"); 
+        pr_err("RELM: Invalid EPT context\n"); 
         return -EINVAL; 
     }
 
     /*ensure addresses are page-aligned */ 
     if((gpa & 0xFFF) || (hpa & 0xFFF))
     {
-        pr_err("KVX: Addresses must be 4KB aligned (GPA=0x%llx, HPA=0x%llx)\n". 
+        pr_err("RELM: Addresses must be 4KB aligned (GPA=0x%llx, HPA=0x%llx)\n". 
                gpa, hpa); 
         return -EINVAL; 
     }
@@ -300,7 +300,7 @@ int kvx_ept_map_page(struct ept_context *ept, uint64_t gpa,
     /*ensure at least read permission is set */ 
     if(!(flags & EPT_ACCESS_READ))
     {
-        pr_err("KVX: EPT mapping must have at least read access\n");
+        pr_err("RELM: EPT mapping must have at least read access\n");
         return -EINVAL; 
     }
 
@@ -309,7 +309,7 @@ int kvx_ept_map_page(struct ept_context *ept, uint64_t gpa,
     uint32_t pml4_index = EPT_PML4_INDEX(gpa); 
 
     /*get PDPT table*/ 
-    pdpt = (ept_pdpt_t *)kvx_ept_get_or_create_table(
+    pdpt = (ept_pdpt_t *)relm_ept_get_or_create_table(
         &ept->pml4->entries[pml4_index], 3);
     if(!pdpt)
     {
@@ -319,7 +319,7 @@ int kvx_ept_map_page(struct ept_context *ept, uint64_t gpa,
 
     uint32_t pdpt_idx = EPT_PDPT_INDEX(gpa); 
 
-    pd = (ept_pd_t *)kvx_ept_get_or_create_table(
+    pd = (ept_pd_t *)relm_ept_get_or_create_table(
         &pdpt->entries[pdpt_idx], 2);
     if(!pd)
     {
@@ -329,7 +329,7 @@ int kvx_ept_map_page(struct ept_context *ept, uint64_t gpa,
 
     uint32_t pd_idx = EPT_PD_INDEX(gpa); 
 
-    pt = (ept_pt_t *)kvx_ept_get_or_create_table(
+    pt = (ept_pt_t *)relm_ept_get_or_create_table(
         &pd->entries[pd_idx], 1); 
     if(!pt)
     {
@@ -343,7 +343,7 @@ int kvx_ept_map_page(struct ept_context *ept, uint64_t gpa,
 
     if(*leaf_entry & EPT_ACCESS_READ)
     {
-        pr_warn("KVX: GPA 0x%llx already mapped, overwriting\n", gpa); 
+        pr_warn("RELM: GPA 0x%llx already mapped, overwriting\n", gpa); 
     }
     else{
         ept->stats.pages_4kb++; 
@@ -354,14 +354,14 @@ int kvx_ept_map_page(struct ept_context *ept, uint64_t gpa,
 
     spin_unlock_irqrestore(&ept->lock, irq_flags); 
 
-    PDEBUG("KVX: Mapped GPA 0x%llx -> HPA 0x%llx (flags=0x%llx)\n",
+    PDEBUG("RELM: Mapped GPA 0x%llx -> HPA 0x%llx (flags=0x%llx)\n",
            gpa, hpa, flags);
     
     return 0; 
 }
 
 /*map multiple pages in a loop */ 
-int kvx_ept_map_range(struct ept_context *ept, uint64_t gpa_start, 
+int relm_ept_map_range(struct ept_context *ept, uint64_t gpa_start, 
                       uint64_t hpa_start, uint64_t size, uint64_t flags)
 {
     uint64_t gpa; 
@@ -377,7 +377,7 @@ int kvx_ept_map_range(struct ept_context *ept, uint64_t gpa_start,
     size = PAGE_ALIGN(size); 
     num_pages = size / EPT_PAGE_SIZE_4KB; 
 
-    pr_info("KVX: Mapping EPT range GPA 0x%llx -> HPA 0x%llx (%llu pages)\n",
+    pr_info("RELM: Mapping EPT range GPA 0x%llx -> HPA 0x%llx (%llu pages)\n",
             gpa_start, hpa_start, num_pages); 
 
     /*map each page in the range */ 
@@ -386,22 +386,22 @@ int kvx_ept_map_range(struct ept_context *ept, uint64_t gpa_start,
         gpa = gpa_start + (i * EPT_PAGE_SIZE_4KB); 
         hpa = hpa_start + (i * EPT_PAGE_SIZE_4KB); 
 
-        ret = kvx_ept_map_page(ept, gpa, hpa, flags);
+        ret = relm_ept_map_page(ept, gpa, hpa, flags);
         if(ret < 0)
         {
-            pr_err("KVX: Failed to map page %llu/%llu (GPA=0x%llx)\n", 
+            pr_err("RELM: Failed to map page %llu/%llu (GPA=0x%llx)\n", 
                    i + 1, num_pages, gpa); 
             return ret; 
         }
     }
 
-    pr_info("KVX: Successfully mapped %llu pages\n", num_pages);
+    pr_info("RELM: Successfully mapped %llu pages\n", num_pages);
 
     return 0;
 }
 
 /*walks EPT table to find the leaf entry and clear it */ 
-int kvx_unmap_page(struct ept_context *ept, uint64_t gpa)
+int relm_unmap_page(struct ept_context *ept, uint64_t gpa)
 {
     ept_pdpt_t *pdpt; 
     ept_pd_t *pd; 
@@ -470,15 +470,15 @@ int kvx_unmap_page(struct ept_context *ept, uint64_t gpa)
     spin_unlock_irqrestore(&ept->lock, irq_flags);
 
     /*invalidate EPT TLB entries for the entir context to ensure consistency */ 
-    kvx_ept_invalidate_context(ept); 
+    relm_ept_invalidate_context(ept); 
 
-    PDEBUG("KVX: Unmapped GPA 0x%llx\n", gpa);
+    PDEBUG("RELM: Unmapped GPA 0x%llx\n", gpa);
 
     return 0; 
 }
 
 /*walk EPT tables to find the HPA of given GPA */  
-int kvx_get_mapping(struct ept_context *ept, uint64_t gpa, uint64_t *hpa)
+int relm_get_mapping(struct ept_context *ept, uint64_t gpa, uint64_t *hpa)
 {
     ept_pdpt_t *pdpt; 
     ept_pd_t *pd; 
@@ -549,17 +549,17 @@ int kvx_get_mapping(struct ept_context *ept, uint64_t gpa, uint64_t *hpa)
 }
 
 /*flush all cached ept translations */ 
-void kvx_ept_invalidate_context(struct ept_context *ept)
+void relm_ept_invalidate_context(struct ept_context *ept)
 {
     if(!ept)
         return; 
 
     _invept(1, ept->eptp);
 
-    PDEBUG("KVX: Invalidated EPT context (EPTP=0x%llx)\n", ept->eptp);
+    PDEBUG("RELM: Invalidated EPT context (EPTP=0x%llx)\n", ept->eptp);
 }
 
-void kvx_ept_dump_tables(struct ept_context *ept)
+void relm_ept_dump_tables(struct ept_context *ept)
 {
     int pml4_idx;
     int pdpt_idx;

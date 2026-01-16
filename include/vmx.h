@@ -13,10 +13,10 @@
 #define VPID_IS_VALID(vpid, max) \
     ((vpid) > 0 && (vpid) <= (max))
 
-#define KVX_MAX_MANAGED_MSRS 8 
+#define relm_MAX_MANAGED_MSRS 8 
 
 
-struct kvx_vm;  // forward declaration
+struct relm_vm;  // forward declaration
 
 struct vcpu_stats
 {
@@ -50,7 +50,7 @@ enum vcpu_state {
 /* Virtual CPU structure */
 struct vcpu {
 
-    struct kvx_vm *vm;
+    struct relm_vm *vm;
     struct host_cpu *hcpu;
 
     uint16_t vpid;
@@ -91,7 +91,7 @@ struct vcpu {
     struct msr_entry *vmentry_load_area; 
     uint64_t vmentry_load_pa;
 
-    uint32_t msr_indices[KVX_MAX_MANAGED_MSRS]; 
+    uint32_t msr_indices[relm_MAX_MANAGED_MSRS]; 
     uint32_t msr_count; 
 
     size_t vmexit_count;
@@ -127,10 +127,10 @@ struct host_cpu
     spinlock_t lock; 
 };
 
-struct vcpu *kvx_vcpu_alloc_init(struct kvx_vm *vm, int vcpu_id);
-int kvx_vcpu_pin_to_cpu(struct vcpu *vcpu, int target_cpu_id);
-void kvx_vcpu_unpin_and_stop(struct vcpu *vcpu);
-void kvx_free_vcpu(struct vcpu *vcpu);
-int kvx_init_vmcs_state(struct vcpu *vcpu);
-void kvx_dump_vcpu(struct vcpu *vcpu); 
+struct vcpu *relm_vcpu_alloc_init(struct relm_vm *vm, int vcpu_id);
+int relm_vcpu_pin_to_cpu(struct vcpu *vcpu, int target_cpu_id);
+void relm_vcpu_unpin_and_stop(struct vcpu *vcpu);
+void relm_free_vcpu(struct vcpu *vcpu);
+int relm_init_vmcs_state(struct vcpu *vcpu);
+void relm_dump_vcpu(struct vcpu *vcpu); 
 #endif /* VMX_H */

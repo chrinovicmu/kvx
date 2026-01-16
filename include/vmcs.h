@@ -177,10 +177,10 @@ struct msr_entry
     uint64_t value; 
 }__attribute__ ((packed, aligned(16))); 
 
-extern const uint32_t kvx_vmexit_msr_indices[];
-extern const uint32_t kvx_vmentry_msr_indices[];
-extern uint64_t kvx_vmentry_msr_values[];
+extern const uint32_t relm_vmexit_msr_indices[];
+extern const uint32_t relm_vmentry_msr_indices[];
+extern uint64_t relm_vmentry_msr_values[];
 
-#define KVX_VMEXIT_MSR_COUNT 7
-#define KVX_VMENTRY_MSR_COUNT 7
+#define relm_VMEXIT_MSR_COUNT 7
+#define relm_VMENTRY_MSR_COUNT 7
 #endif 

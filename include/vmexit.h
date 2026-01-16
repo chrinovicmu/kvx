@@ -69,7 +69,7 @@
 #define EXIT_REASON_XRSTORS                     0x00000040
 #define EXIT_REASON_PCOMMIT                     0x00000041
 
-extern struct vcpu *kvx_get_current_vcpu(void);
+extern struct vcpu *relm_get_current_vcpu(void);
 
 struct stack_guest_gprs {
     uint64_t r15;
@@ -98,10 +98,10 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
     uint64_t guest_rsp;
     uint64_t instr_len;
 
-    vcpu = kvx_get_current_vcpu();
+    vcpu = relm_get_current_vcpu();
     if(!vcpu)
     {
-        pr_err("KVX: handle_vmexit called but no current VCPU!\n");
+        pr_err("relm: handle_vmexit called but no current VCPU!\n");
         return 0;
     }
 
@@ -110,7 +110,7 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
     /*check if VM-entry failure */
     if(exit_reason & (1ULL << 32))
     {
-        pr_err("KVX: [VPID=%u] VM-entry failure in exit handler\n",
+        pr_err("relm: [VPID=%u] VM-entry failure in exit handler\n",
                vcpu->vpid);
         return 0;
     }
@@ -124,7 +124,7 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
     if(!vcpu->launched)
     {
         vcpu->launched = 1;
-        pr_info("KVX: [VPID=%u] First VM-exit (exit #%llu), now using VMRESUME\n",
+        pr_info("relm: [VPID=%u] First VM-exit (exit #%llu), now using VMRESUME\n",
                 vcpu->vpid, vcpu->stats.total_exits);
     }
 
@@ -147,7 +147,7 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
     vcpu->regs.rsp = guest_rsp;
     vcpu->regs.rip = guest_rip;
 
-    PDEBUG("KVX: [VPID=%u] Exit #%llu: reason=%llu RIP=0x%llx\n",
+    PDEBUG("relm: [VPID=%u] Exit #%llu: reason=%llu RIP=0x%llx\n",
            vcpu->vpid, vcpu->stats.total_exits, exit_reason, guest_rip);
 
     switch(exit_reason)
@@ -158,7 +158,7 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
             uint32_t vector = intr_info & 0xFF;
             uint32_t intr_type = (intr_info >> 8) & 0x7;
 
-            pr_err("KVX: [VPID=%u] Guest exception: vector=%u type=%u at RIP=0x%llx\n",
+            pr_err("relm: [VPID=%u] Guest exception: vector=%u type=%u at RIP=0x%llx\n",
                    vcpu->vpid, vector, intr_type, guest_rip);
 
             /*treat all exceptions as fatal */
@@ -170,25 +170,25 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
 
             /* external interrupt arrived while guest was running
             * just re-enter the guest */
-            PDEBUG("KVX: [VPID=%u] External interrupt\n", vcpu->vpid);
+            PDEBUG("relm: [VPID=%u] External interrupt\n", vcpu->vpid);
             return 1;
 
         case EXIT_REASON_TRIPLE_FAULT:
 
-            pr_err("KVX: [VPID=%u] Guest triple fault at RIP=0x%llx\n",
+            pr_err("relm: [VPID=%u] Guest triple fault at RIP=0x%llx\n",
                    vcpu->vpid, guest_rip);
             vcpu->state = VCPU_STATE_STOPPED;
             return 0;
 
         case EXIT_REASON_INIT_SIGNAL:
 
-            pr_info("KVX: [VPID=%u] INIT signal received\n", vcpu->vpid);
+            pr_info("relm: [VPID=%u] INIT signal received\n", vcpu->vpid);
             vcpu->state = VCPU_STATE_STOPPED;
             return 0;
 
         case EXIT_REASON_HLT:
 
-            pr_info("KVX: [VPID=%u] Guest executed HLT at RIP=0x%llx\n",
+            pr_info("relm: [VPID=%u] Guest executed HLT at RIP=0x%llx\n",
                     vcpu->vpid, guest_rip);
             vcpu->halted = true;
             vcpu->state = VCPU_STATE_HALTED;
@@ -205,7 +205,7 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
             uint32_t subleaf = vcpu->regs.rcx & 0xFFFFFFFF;
             uint32_t eax, ebx, ecx, edx;
 
-            PDEBUG("KVX: [VPID=%u] CPUID leaf=0x%x subleaf=0x%x\n",
+            PDEBUG("relm: [VPID=%u] CPUID leaf=0x%x subleaf=0x%x\n",
                    vcpu->vpid, leaf, subleaf);
 
             __asm__ volatile(
@@ -238,7 +238,7 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
             uint32_t size = (exit_qualification & 0x7) + 1;
             uint16_t port = (exit_qualification >> 16) & 0xFFFF;
 
-            pr_info("KVX: [VPID=%u] I/O %s%s%s port=0x%x size=%u at RIP=0x%llx\n",
+            pr_info("relm: [VPID=%u] I/O %s%s%s port=0x%x size=%u at RIP=0x%llx\n",
                     vcpu->vpid,
                     is_in ? "IN" : "OUT",
                     is_string ? " STRING" : "",
@@ -255,7 +255,7 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
 
         case EXIT_REASON_VMCALL:
 
-            pr_info("KVX: [VPID=%u] VMCALL hypercall at RIP=0x%llx\n",
+            pr_info("relm: [VPID=%u] VMCALL hypercall at RIP=0x%llx\n",
                     vcpu->vpid, guest_rip);
 
             /*TODO: implement hypercall
@@ -267,7 +267,7 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
         case EXIT_REASON_MSR_READ:
         {
             uint32_t msr = vcpu->regs.rcx & 0xFFFFFFFF;
-            pr_info("KVX: [VPID=%u] RDMSR 0x%x at RIP=0x%llx\n",
+            pr_info("relm: [VPID=%u] RDMSR 0x%x at RIP=0x%llx\n",
                     vcpu->vpid, msr, guest_rip);
 
             /*TODO: emulate MSR_READ
@@ -287,7 +287,7 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
             uint32_t msr = vcpu->regs.rcx & 0xFFFFFFFF;
             uint64_t value = ((uint64_t)vcpu->regs.rdx << 32) | (vcpu->regs.rax & 0xFFFFFFFF);
 
-            pr_info("KVX: [VPID=%u] WRMSR 0x%x = 0x%llx at RIP=0x%llx\n",
+            pr_info("relm: [VPID=%u] WRMSR 0x%x = 0x%llx at RIP=0x%llx\n",
                     vcpu->vpid, msr, value, guest_rip);
 
             /*TODO: emulate MSR write
@@ -308,7 +308,7 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
             bool ept_writable = exit_qualification & (1ULL << 4);
             bool ept_executable = exit_qualification & (1ULL << 5);
 
-            pr_err("KVX: [VPID=%u] EPT violation at GPA 0x%llx\n",
+            pr_err("relm: [VPID=%u] EPT violation at GPA 0x%llx\n",
                    vcpu->vpid, gpa);
 
             pr_err(" Access: %s%s%s at RIP=0x%llx\n",
@@ -328,18 +328,18 @@ static int handle_vmexit(struct stack_guest_gprs *guest_gprs)
 
         case EXIT_REASON_INVALID_GUEST_STATE:
 
-            pr_err("KVX: [VPID=%u] Invalid guest state\n", vcpu->vpid);
+            pr_err("relm: [VPID=%u] Invalid guest state\n", vcpu->vpid);
             pr_err(" Guest RIP: 0x%llx\n", guest_rip);
             pr_err(" Guest RSP: 0x%llx\n", guest_rsp);
 
-            kvx_dump_vcpu(vcpu);
+            relm_dump_vcpu(vcpu);
 
             vcpu->state = VCPU_STATE_STOPPED;
             return 0;
 
         default:
 
-            pr_err("KVX: [VPID=%u] Unhandled VM-exit reason %llu\n",
+            pr_err("relm: [VPID=%u] Unhandled VM-exit reason %llu\n",
                    vcpu->vpid, exit_reason);
             pr_err(" Guest RIP: 0x%llx\n", guest_rip);
             pr_err(" Exit qualification: 0x%llx\n", exit_qualification);

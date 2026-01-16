@@ -116,33 +116,33 @@ struct ept_context
 
 }; 
 
-bool kvx_ept_check_support(void); 
-struct ept_context *kvx_ept_context_create(void); 
-void kvx_ept_context_destroy(struct ept_context *ept); 
+bool relm_ept_check_support(void); 
+struct ept_context *relm_ept_context_create(void); 
+void relm_ept_context_destroy(struct ept_context *ept); 
 
 /*map guest physical page to host physical page */ 
-int kvx_ept_map_page(struct ept_context *ept, uint64_t gpa,
+int relm_ept_map_page(struct ept_context *ept, uint64_t gpa,
                      uint64_t hpa, uint64_t flags); 
 
 /*map a range of guest physical memory */ 
-int kvx_ept_map_range(struct ept_context *ept, uint64_t gpa_start,
+int relm_ept_map_range(struct ept_context *ept, uint64_t gpa_start,
                       uint64_t hpa_start, uint64_t size, uint64_t flags); 
 
-int kvx_ept_unmap_page(struct ept_context *ept, uint64_t gpa); 
+int relm_ept_unmap_page(struct ept_context *ept, uint64_t gpa); 
 
 /*look up host physicall address for gpa 
  * walk EPT tables to find HPA mapped to a given GPA*/ 
-int kvx_ept_get_mapping(struct ept_context *ept, uint64_t gpa, uint64_t *hpa); 
+int relm_ept_get_mapping(struct ept_context *ept, uint64_t gpa, uint64_t *hpa); 
 
 /*change memory type for a mapped page */ 
-int kvx_ept_set_memory_type(struct ept_context *ept, uint64_t gpa, uint8_t memtype); 
+int relm_ept_set_memory_type(struct ept_context *ept, uint64_t gpa, uint8_t memtype); 
 
-int kvx_ept_handle_violation(struct vcpu *vcpu, uint64_t gpa, uint64_t exit_qualification); 
+int relm_ept_handle_violation(struct vcpu *vcpu, uint64_t gpa, uint64_t exit_qualification); 
 
 /*invalidate all TLB entries for EPT */ 
-void kvx_ept_invalidate_context(struct ept_context *ept); 
+void relm_ept_invalidate_context(struct ept_context *ept); 
 
-void kvx_ept_dump_tables(struct ept_context *ept); 
+void relm_ept_dump_tables(struct ept_context *ept); 
 
 
 /*extract indec for each level from a GPA */ 

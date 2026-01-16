@@ -8,8 +8,8 @@
 # This code runs in kernel mode, with interrupts disabled or controlled,
 # and must obey the System V AMD64 ABI where applicable.
 
-.globl kvx_vmentry_asm 
-.globl kvx_vmexit_handler 
+.globl relm_vmentry_asm 
+.globl relm_vmexit_handler 
 .extern handle_vmexit
 
 # streucture offsets (match struct guest_regs layout)
@@ -30,7 +30,7 @@
 .set VCPU_RAX, 112
 
 
-kvx_vmentry_asm:
+relm_vmentry_asm:
     #RDI : guest_regs pointer 
     #RSI : lanched flag 
 
@@ -74,7 +74,7 @@ vmx_error:
     ret 
 
 
-kvx_vmexit_handler:
+relm_vmexit_handler:
     #CPU has already reloaded HOST_RSP from VMCS.
     # capture all Guest GPRs onto the Host stack.
     push %rax
