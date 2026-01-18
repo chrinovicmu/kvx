@@ -77,5 +77,5 @@ module_exit(relm_module_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Chrinovic M");
-MODULE_DESCRIPTION("A Type-1 Hypervisor Kernel Module");
+MODULE_DESCRIPTION("A Type-1 Linux Hypervisor");
 MODULE_VERSION("0.1");

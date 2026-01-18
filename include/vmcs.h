@@ -181,6 +181,6 @@ extern const uint32_t relm_vmexit_msr_indices[];
 extern const uint32_t relm_vmentry_msr_indices[];
 extern uint64_t relm_vmentry_msr_values[];
 
-#define relm_VMEXIT_MSR_COUNT 7
-#define relm_VMENTRY_MSR_COUNT 7
+#define RELM_VMEXIT_MSR_COUNT 7
+#define RELM_VMENTRY_MSR_COUNT 7
 #endif 

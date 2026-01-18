@@ -13,7 +13,7 @@
 #define VPID_IS_VALID(vpid, max) \
     ((vpid) > 0 && (vpid) <= (max))
 
-#define relm_MAX_MANAGED_MSRS 8 
+#define RELM_MAX_MANAGED_MSRS 8 
 
 
 struct relm_vm;  // forward declaration
@@ -91,7 +91,7 @@ struct vcpu {
     struct msr_entry *vmentry_load_area; 
     uint64_t vmentry_load_pa;
 
-    uint32_t msr_indices[relm_MAX_MANAGED_MSRS]; 
+    uint32_t msr_indices[RELM_MAX_MANAGED_MSRS]; 
     uint32_t msr_count; 
 
     size_t vmexit_count;

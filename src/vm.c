@@ -1,3 +1,4 @@
+#include <cerrno>
 #include <linux/kthread.h>
 #include <linux/sched.h>
 #include <linux/smp.h>
@@ -6,6 +7,8 @@
 #include <linux/mm.h>        
 #include <linux/page-flags.h>
 #include <linux/highmem.h>   
+#include <stdint.h>
+#include <string.h>
 #include <vmx.h>
 #include <vm.h>
 #include <ept.h>
@@ -57,7 +60,7 @@ static void relm_op_print_stats(struct relm_vm *vm)
     if(!vm)
         return; 
 
-    pr_info("relm [%s] Stats: Exits=%llu, CPUID=%llu, HLT=%llu\n",
+    pr_info("RELM [%s] Stats: Exits=%llu, CPUID=%llu, HLT=%llu\n",
             vm->vm_name, vm->stats.total_exits,
             vm->stats.cpuid_exits, vm->stats.hlt_exits);
 }
@@ -73,7 +76,7 @@ static void relm_op_dump_regs(struct relm_vm *vm, int vpid)
     if(!vcpu) 
         return;
    
-    pr_info("relm [%s] VCPU %d RIP: 0x%llx RSP: 0x%llx\n",
+    pr_info("RELM [%s] VCPU %d RIP: 0x%llx RSP: 0x%llx\n",
             vm->vm_name, vpid, vcpu->regs.rip, vcpu->regs.rsp);
 }
 
@@ -92,13 +95,14 @@ int relm_vm_allocate_guest_ram(struct relm_vm *vm, uint64_t size, uint64_t gpa_s
     uint64_t gpa;
     uint64_t hpa;
     int ret;
+
     if(!vm || !vm->ept)
         return -EINVAL;
 
     size = PAGE_ALIGN(size);
     num_pages = size / PAGE_SIZE;
 
-    pr_info("relm: Allocating %llu pages (%llu MB) of guest RAM at GPA 0x%llx\n",
+    pr_info("RELM: Allocating %llu pages (%llu MB) of guest RAM at GPA 0x%llx\n",
             num_pages, size / (1024 * 1024), gpa_start);
 
     region = kzalloc(sizeof(*region), GFP_KERNEL);
@@ -122,7 +126,7 @@ int relm_vm_allocate_guest_ram(struct relm_vm *vm, uint64_t size, uint64_t gpa_s
         page = alloc_page(GFP_KERNEL | __GFP_ZERO);
         if(!page)
         {
-            pr_err("relm: Failed to allocate page %llu/%llu\n",
+            pr_err("RELM: Failed to allocate page %llu/%llu\n",
                    i + 1, num_pages);
             ret = -ENOMEM;
             goto _cleanup;
@@ -135,7 +139,7 @@ int relm_vm_allocate_guest_ram(struct relm_vm *vm, uint64_t size, uint64_t gpa_s
         ret = relm_ept_map_page(vm->ept, gpa, hpa, EPT_RWX);
         if(ret < 0)
         {
-            pr_err("relm: Failed to map page at GPA 0x%llx\n", gpa);
+            pr_err("RELM: Failed to map page at GPA 0x%llx\n", gpa);
             __free_page(page);
             goto _cleanup;
         }
@@ -143,7 +147,7 @@ int relm_vm_allocate_guest_ram(struct relm_vm *vm, uint64_t size, uint64_t gpa_s
         /*progress indicator for every 256MB*/
         if (i > 0 && (i % (256 * 1024 * 1024 / PAGE_SIZE)) == 0)
         {
-            pr_info("relm: Mapped %llu MB...\n",
+            pr_info("RELM: Mapped %llu MB...\n",
                     (i * PAGE_SIZE) / (1024 * 1024));
         }
     }
@@ -152,7 +156,7 @@ int relm_vm_allocate_guest_ram(struct relm_vm *vm, uint64_t size, uint64_t gpa_s
     vm->mem_regions = region;
     vm->total_guest_ram += size;
 
-    pr_info("relm: Successfully allocated and mapped guest RAM\n");
+    pr_info("RELM: Successfully allocated and mapped guest RAM\n");
    
     relm_ept_invalidate_context(vm->ept);
    
@@ -207,7 +211,7 @@ struct relm_vm * relm_create_vm(int vm_id, const char *vm_name,
     vm = kzalloc(sizeof(struct relm_vm), GFP_KERNEL);
     if(!vm)
     {
-        pr_err("relm: Failed to allocate VM header\n");
+        pr_err("RELM: Failed to allocate VM header\n");
         return NULL;
     }
 
@@ -223,7 +227,8 @@ struct relm_vm * relm_create_vm(int vm_id, const char *vm_name,
         snprintf(vm->vm_name, sizeof(vm->vm_name), "vm-%d", vm_id);
 
     spin_lock_init(&vm->lock);
-
+ 
+   /*
     if(!relm_ept_check_support())
     {
         pr_err("relm: EPT not supported on this CPU\n");
@@ -237,8 +242,15 @@ struct relm_vm * relm_create_vm(int vm_id, const char *vm_name,
         vm->ept = NULL;
         goto _out_free_vm;
     }
+*/ 
+    ret = relm_setup_ept(vm); 
+    if(ret < 0)
+    {
+        pr_err("RELM: Failed to setup EPT context in VM\n"); 
+        goto _out_free_vm; 
+    }
 
-    pr_info("relm: Created EPT context for VM %d (EPTP=0x%llx)\n",
+    pr_info("RELM: Created EPT context for VM %d (EPTP=0x%llx)\n",
             vm_id, vm->ept->eptp);
 
     if(ram_size > 0)
@@ -246,22 +258,22 @@ struct relm_vm * relm_create_vm(int vm_id, const char *vm_name,
         ret = relm_vm_allocate_guest_ram(vm, ram_size, 0x0);
         if(ret < 0)
         {
-            pr_err("relm: Failed to allocate guest RAM\n");
+            pr_err("RELM: Failed to allocate guest RAM\n");
             goto _out_free_ept;
         }
-        pr_info("relm: Allocated %llu MB guest RAM\n", ram_size >> 20);
+        pr_info("RELM: Allocated %llu MB guest RAM\n", ram_size >> 20);
     }
 
     vm->vcpus = kcalloc(vm->max_vcpus, sizeof(struct vcpu*), GFP_KERNEL);
     if(!vm->vcpus)
     {
-        pr_err("relm: Failed to allocate VCPU array\n");
+        pr_err("RELM: Failed to allocate VCPU array\n");
         goto _out_free_memory;
     }
 
     vm->state = VM_STATE_INITIALIZED;
 
-    pr_info("relm: VM '%s' (ID: %d) created with %llu MB RAM\n",
+    pr_info("RELM: VM '%s' (ID: %d) created with %llu MB RAM\n",
             vm->vm_name, vm->vm_id, (ram_size >> 20));
 
     return vm;
@@ -285,7 +297,7 @@ void relm_destroy_vm(struct relm_vm *vm)
     if(!vm)
         return;
 
-    pr_info("relm: Destroying VM '%s' (ID: %d)\n", vm->vm_name, vm->vm_id);
+    pr_info("RELM: Destroying VM '%s' (ID: %d)\n", vm->vm_name, vm->vm_id);
 
     /*stop and free all vcpus */
     if(vm->vcpus)
@@ -313,9 +325,10 @@ void relm_destroy_vm(struct relm_vm *vm)
     }
 
     kfree(vm);
-    pr_info("relm: VM destruction complete.\n");
+    pr_info("RELM: VM destruction complete.\n");
 }
 
+/*copy data from host kernel memory into guest's physical address space.*/ 
 int relm_vm_copy_to_guest(struct relm_vm *vm, uint64_t gpa,
                          const void *data, size_t size)
 {
@@ -328,15 +341,84 @@ int relm_vm_copy_to_guest(struct relm_vm *vm, uint64_t gpa,
     const uint8_t *src = (const uint8_t *)data;
     uint8_t *page_va;
     size_t copied = 0;
+    uint64_t current_gpa;
+    struct page *page; 
 
     if(!vm || !data || size == 0)
+        pr_err("RELM: Invalid parameters to copy_to_guest\n"); 
         return -EINVAL;
+    
+    current_gpa = gpa;
 
-    region = vm->mem_regions;
+    pr_info("RELM: Copying %zu bytes to guest at GPA 0x%llx\n", size, gpa);
 
-    // Note: Implementation is still incomplete in original code
-    // This is just a placeholder to allow compilation
-    return -ENOSYS;
+    while(copied < size)
+    {
+        region = vm->mem_regions; 
+        while(region)
+        {
+            /*check if current_gpa falls into this region's address space range */ 
+            if(current_gpa >= region->gpa_start && 
+               current_gpa < (region->gpa_start + region->size)){
+                break; 
+            }
+            region = region->next; 
+        }
+
+        if(!region)
+        {
+            pr_err("RELM: GPA %0xllx not mapped in any guest memory region\n", 
+                   current_gpa); 
+            return copied > 0 ? copied : -EFAULT; 
+        }
+
+        /*the offset within the region */ 
+        region_offset = current_gpa - region->start; 
+        /*page within in region */ 
+        page_index = region_offset / PAGE_SIZE; 
+
+        page_offset = region_offset % PAGE_SIZE; 
+
+        bytes_to_copy = PAGE_SIZE = page_offset; 
+        if(bytes_to_copy > (size - copied)){
+            bytes_to_copy = size - copied; 
+        }
+        if(bytes_to_copy > (region->size - region_offset)){
+            bytes_to_copy = region->size - region_offset; 
+        }
+
+        /*get physical page corresponding to this guest page*/ 
+        page = region->pages[page_index]; 
+        if(!page)
+        {
+            pr_err("RELM: NULL page at index %luu in region at GPA 0x%llx\n", 
+                   page_index, region->gpa_start); 
+            return copied > 0 ? copied : -EFAULT; 
+        }
+
+        /*map guest page into kernel virtual address space */ 
+        page_va = kmap_local_page(page); 
+        if(!page_va)
+        {
+            pr_err("RELM: Failed to map guest at GPA 0x%llx\n", 
+                   current_gpa); 
+        }
+
+        /*perform actaul memory copy*/ 
+        memccpy(page_va + page_offset, src + copied, bytes_to_copy); 
+
+        kunmap(page); 
+
+        copied += bytes_to_copy; 
+        current_gpa += bytes_to_copy; 
+
+        if (size > (10 * 1024 * 1024) && (copied % (1024 * 1024)) == 0) {
+            pr_info("RELM: Copied %zu / %zu bytes...\n", copied, size);
+        }     
+    }
+
+    pr_info("RELM: Successfully copied %zu bytes to guest memory\n", copied);
+    return copied; 
 }
 
 /**
@@ -354,13 +436,13 @@ int relm_vm_add_vcpu(struct relm_vm *vm, int vpid)
 
     if(!vm)
     {
-        pr_err("relm: Invalid VM\n");
+        pr_err("RELM: Invalid VM\n");
         return -EINVAL;
     }
 
     if(!VPID_IS_VALID(vpid, vm->max_vcpus))
     {
-        pr_err("relm: Invalid VPID (must be < max_vcpus)\n");
+        pr_err("RELM: Invalid VPID (must be < max_vcpus)\n");
         return -EINVAL;
     }
 
@@ -368,7 +450,7 @@ int relm_vm_add_vcpu(struct relm_vm *vm, int vpid)
 
     if(vm->vcpus[index])
     {
-        pr_err("relm: VCPU with VPID %u already exists\n", vpid);
+        pr_err("RELM: VCPU with VPID %u already exists\n", vpid);
         return -EEXIST;
     }
 
@@ -378,7 +460,7 @@ int relm_vm_add_vcpu(struct relm_vm *vm, int vpid)
     vcpu = relm_vcpu_alloc_init(vm, vpid);
     if(!vcpu)
     {
-        pr_err("relm: Failed to allocate VCPU\n");
+        pr_err("RELM: Failed to allocate VCPU\n");
         return -ENOMEM;
     }
    
@@ -390,7 +472,7 @@ int relm_vm_add_vcpu(struct relm_vm *vm, int vpid)
     vcpu->state = VCPU_STATE_INITIALIZED;
     vm->online_vcpus++;
 
-    PDEBUG("relm: VCPU %d for VM %d successfully pinned to Host CPU %d",
+    PDEBUG("RELM: VCPU %d for VM %d successfully pinned to Host CPU %d",
            index, vm->vm_id, vcpu->target_cpu_id);
 
     return 0;
@@ -425,14 +507,14 @@ static int relm_vcpu_loop(void *data)
     int ret;
     int vm_entry_status;
 
-    pr_info("relm: VCPU %d thread starting on CPU %d\n",
+    pr_info("RELM: VCPU %d thread starting on CPU %d\n",
             vcpu->vpid, smp_processor_id());
 
     /*secure context: pin to specific CPU assigned during 'add_cpu' */
     ret = relm_vcpu_pin_to_cpu(vcpu, vcpu->target_cpu_id);
     if(ret < 0)
     {
-        pr_err("relm: Failed to pin VCPU %u to CPU %d\n",
+        pr_err("RELM: Failed to pin VCPU %u to CPU %d\n",
                vcpu->vpid, vcpu->target_cpu_id);
         return ret;
     }
@@ -440,39 +522,39 @@ static int relm_vcpu_loop(void *data)
     /*acitvate hardware: load the vmcs on this specific core */
     if(_vmptrld(vcpu->vmcs_pa))
     {
-        pr_err("relm: VMPTRLD failed for VCPU %d on CPU %d\n",
+        pr_err("RELM: VMPTRLD failed for VCPU %d on CPU %d\n",
                vcpu->vpid, vcpu->target_cpu_id);
         return -EIO;
     }
 
-    pr_info("relm: VMCS loaded for VCPU %d (PA=0x%llx)\n",
+    pr_info("RELM: VMCS loaded for VCPU %d (PA=0x%llx)\n",
             vcpu->vpid, vcpu->vmcs_pa);
 
     ret = relm_init_vmcs_state(vcpu);
     if(ret < 0)
     {
-        pr_err("relm: Failed to initialize VMCS state\n");
+        pr_err("RELM: Failed to initialize VMCS state\n");
         __vmclear(vcpu->vmcs_pa);
         return ret;
     }
 
     vcpu->state = VCPU_STATE_RUNNING;
-    pr_info("relm: VCPU %d entering execution loop\n", vcpu->vpid);
+    pr_info("RELM: VCPU %d entering execution loop\n", vcpu->vpid);
 
     while(!kthread_should_stop())
     {
         ret = relm_vmentry_asm(&vcpu->regs, vcpu->launched);
 
         /*we only reach here if VMLAUNCH/VMRESUME fails */
-        pr_err("relm: [VPID=%u] VM-%s FAILED!\n",
+        pr_err("RELM: [VPID=%u] VM-%s FAILED!\n",
                vcpu->vpid, vcpu->launched ? "RESUME" : "LAUNCH");
        
         uint64_t error = __vmread(VMCS_INSTRUCTION_ERROR_FIELD);
        
-        pr_err("relm: [VPID=%u] VM instruction error: %llu\n",
+        pr_err("RELM: [VPID=%u] VM instruction error: %llu\n",
                vcpu->vpid, error);
        
-        pr_err("relm: [VPID=%u] Guest state at failure:\n", vcpu->vpid);
+        pr_err("RELM: [VPID=%u] Guest state at failure:\n", vcpu->vpid);
         pr_err(" RIP: 0x%016llx\n", __vmread(GUEST_RIP));
         pr_err(" RSP: 0x%016llx\n", __vmread(GUEST_RSP));
         pr_err(" RFLAGS: 0x%016llx\n", __vmread(GUEST_RFLAGS));
@@ -480,14 +562,14 @@ static int relm_vcpu_loop(void *data)
         pr_err(" CR3: 0x%016llx\n", __vmread(GUEST_CR3));
         pr_err(" CR4: 0x%016llx\n", __vmread(GUEST_CR4));
        
-        pr_err("relm: [VPID=%u] Dumping VMCS for analysis:\n", vcpu->vpid);
+        pr_err("RELM: [VPID=%u] Dumping VMCS for analysis:\n", vcpu->vpid);
         relm_dump_vcpu(vcpu);
        
         break;
     }
 
-    pr_info("relm: [VPID=%u] Execution loop exiting\n", vcpu->vpid);
-    pr_info("relm: [VPID=%u] Total VM-exits handled: %llu\n",
+    pr_info("RELM: [VPID=%u] Execution loop exiting\n", vcpu->vpid);
+    pr_info("RELM: [VPID=%u] Total VM-exits handled: %llu\n",
             vcpu->vpid, vcpu->stats.total_exits);
 
     if(vcpu->state == VCPU_STATE_RUNNING)
@@ -496,7 +578,7 @@ static int relm_vcpu_loop(void *data)
     relm_set_current_vcpu(NULL);
     __vmclear(vcpu->vmcs_pa);
 
-    pr_info("relm: [VPID=%u] Thread exiting\n", vcpu->vpid);
+    pr_info("RELM: [VPID=%u] Thread exiting\n", vcpu->vpid);
 
     return 0;
 }
@@ -512,13 +594,13 @@ int relm_run_vcpu(struct relm_vm *vm, uint64_t vpid)
     vcpu = relm_vm_get_vcpu(vm, vpid);
     if(!vcpu)
     {
-        pr_err("relm: VCPU VPID=%u, does not exist\n", (uint32_t)vpid);
+        pr_err("RELM: VCPU VPID=%u, does not exist\n", (uint32_t)vpid);
         return -ENOENT;
     }
 
     if(vcpu->host_task)
     {
-        pr_err("relm: VCPU VPID=%u already running\n", (uint32_t)vpid);
+        pr_err("RELM: VCPU VPID=%u already running\n", (uint32_t)vpid);
         return -EBUSY;
     }
 
@@ -527,7 +609,7 @@ int relm_run_vcpu(struct relm_vm *vm, uint64_t vpid)
     vcpu->stats.total_exits = 0;
     vcpu->exit_reason = 0;
 
-    pr_info("relm: Starting VCPU VPID=%u\n", (uint32_t)vpid);
+    pr_info("RELM: Starting VCPU VPID=%u\n", (uint32_t)vpid);
 
     vcpu->host_task = kthread_create(
         relm_vcpu_loop,
@@ -540,14 +622,14 @@ int relm_run_vcpu(struct relm_vm *vm, uint64_t vpid)
     if(IS_ERR(vcpu->host_task))
     {
         err = PTR_ERR(vcpu->host_task);
-        pr_err("relm: Failed to create thread for VPID %u: %ld\n",
+        pr_err("RELM: Failed to create thread for VPID %u: %ld\n",
                (uint32_t)vpid, err);
         vcpu->host_task = NULL;
         return err;
     }
 
     wake_up_process(vcpu->host_task);
-    pr_info("relm: VCPU VPID=%u thread started\n", (uint32_t)vpid);
+    pr_info("RELM: VCPU VPID=%u thread started\n", (uint32_t)vpid);
 
     return 0;
 }
@@ -563,24 +645,24 @@ int relm_stop_vcpu(struct relm_vm *vm, uint16_t vpid)
     vcpu = relm_vm_get_vcpu(vm, vpid);
     if(!vcpu)
     {
-        pr_err("relm: VCPU VPID=%u does not exist\n", vpid);
+        pr_err("RELM: VCPU VPID=%u does not exist\n", vpid);
         return -ENOENT;
     }
 
     if(!vcpu->host_task)
     {
-        pr_warn("relm: VCPU VPID=%u is not running\n", vpid);
+        pr_warn("RELM: VCPU VPID=%u is not running\n", vpid);
         return 0;
     }
 
-    pr_info("relm: Stopping VCPU VPID=%u...............................\n", vpid);
+    pr_info("RELM: Stopping VCPU VPID=%u...............................\n", vpid);
    
     ret = kthread_stop(vcpu->host_task);
    
     vcpu->host_task = NULL;
     vcpu->state = VCPU_STATE_STOPPED;
 
-    pr_info("relm: VCPU VPID=%u stopped (total exits: %llu)\n",
+    pr_info("RELM: VCPU VPID=%u stopped (total exits: %llu)\n",
             vpid, vcpu->stats.total_exits);
 
     return 0;
@@ -597,24 +679,24 @@ int relm_run_vm(struct relm_vm *vm)
 
     if(!vm)
     {
-        pr_err("relm: Cannot run NULL VM\n"); 
+        pr_err("RELM: Cannot run NULL VM\n"); 
         return -EINVAL; 
     }
 
     if(vm->state != VM_STATE_INITIALIZED && vm->state != VM_STATE_STOPPED) 
     {
-        pr_err("relm: VM '%s' is not in runnable state (current state : %s)\n",
+        pr_err("RELM: VM '%s' is not in runnable state (current state : %s)\n",
                vm->vm_name, 
                vm_state_to_string(vm->state));
         return -EINVAL; 
     }
 
     if (vm->online_vcpus == 0) {
-        pr_err("relm: VM '%s' has no VCPUs configured\n", vm->vm_name);
+        pr_err("RELM: VM '%s' has no VCPUs configured\n", vm->vm_name);
         return -ENOENT;
     }
 
-    pr_info("relm: Starting VM '%s' (ID: %d) with %d VCPU(s)\n",
+    pr_info("RELM: Starting VM '%s' (ID: %d) with %d VCPU(s)\n",
             vm->vm_name, vm->vm_id, vm->online_vcpus);
 
 
@@ -635,19 +717,19 @@ int relm_run_vm(struct relm_vm *vm)
 
         if (vcpu->host_task)
         {
-            pr_warn("relm: VCPU VPID=%u already running, skipping\n",
+            pr_warn("RELM: VCPU VPID=%u already running, skipping\n",
                     vcpu->vpid);
             started_vcpus++;
             continue;
         }
 
-        pr_info("relm: Launching VCPU VPID=%u (target CPU: %d)\n",
+        pr_info("RELM: Launching VCPU VPID=%u (target CPU: %d)\n",
                 vcpu->vpid, vcpu->target_cpu_id);
 
         ret = relm_run_vcpu(vm, vcpu->vpid); 
         if(ret < 0)
         {
-            pr_err("relm: Failed to start VCPU VPID=%u: %d\n", 
+            pr_err("RELM: Failed to start VCPU VPID=%u: %d\n", 
                    vcpu->vpid, ret); 
 
             goto _stop_all_vcpus; 
@@ -658,20 +740,20 @@ int relm_run_vm(struct relm_vm *vm)
 
     if (started_vcpus == 0) 
     {
-        pr_err("relm: Failed to start any VCPUs for VM '%s'\n",
+        pr_err("RELM: Failed to start any VCPUs for VM '%s'\n",
                vm->vm_name);
         vm->state = VM_STATE_STOPPED;
         return -EIO;
     }
 
-    pr_info("relm: VM '%s' successfully started with %d/%d VCPUs running\n",
+    pr_info("RELM: VM '%s' successfully started with %d/%d VCPUs running\n",
             vm->vm_name, started_vcpus, vm->online_vcpus);
 
     return 0;
 
 _stop_all_vcpus:
 
-    pr_err("relm: Stopping all VCPUs due to launch failure\n");
+    pr_err("RELM: Stopping all VCPUs due to launch failure\n");
 
     for (i = 0; i < vm->max_vcpus; i++) 
     {
@@ -680,7 +762,7 @@ _stop_all_vcpus:
             continue;
         }
 
-        pr_info("relm: Stopping VCPU VPID=%u\n", vcpu->vpid);
+        pr_info("RELM: Stopping VCPU VPID=%u\n", vcpu->vpid);
         relm_stop_vcpu(vm, vcpu->vpid);
     }
 
@@ -700,17 +782,17 @@ int relm_stop_vm(struct relm_vm *vm)
 
     if (!vm) 
     {
-        pr_err("relm: Cannot stop NULL VM\n");
+        pr_err("RELM: Cannot stop NULL VM\n");
         return -EINVAL;
     }
 
     if (!vm->vcpus)
     {
-        pr_warn("relm: VM '%s' has no VCPU array\n", vm->vm_name);
-        return 0;
+        pr_warn("RELM: VM '%s' has no VCPU array\n", vm->vm_name);
+        return -EINVAL;
     }
 
-    pr_info("relm: Stopping VM '%s' (ID: %d)\n",
+    pr_info("RELM: Stopping VM '%s' (ID: %d)\n",
             vm->vm_name, vm->vm_id);
 
     for (i = 0; i < vm->max_vcpus; i++) {
@@ -724,12 +806,12 @@ int relm_stop_vm(struct relm_vm *vm)
             continue;
         }
 
-        pr_info("relm: Stopping VCPU VPID=%u\n", vcpu->vpid);
+        pr_info("RELM: Stopping VCPU VPID=%u\n", vcpu->vpid);
 
         ret = relm_stop_vcpu(vm, vcpu->vpid);
         if (ret < 0)
         {
-            pr_err("relm: Failed to stop VCPU VPID=%u: %d\n",
+            pr_err("RELM: Failed to stop VCPU VPID=%u: %d\n",
                    vcpu->vpid, ret);
         } else {
             stopped_vcpus++;
@@ -740,7 +822,7 @@ int relm_stop_vm(struct relm_vm *vm)
     vm->state = VM_STATE_STOPPED;
     spin_unlock(&vm->lock);
 
-    pr_info("relm: VM '%s' stopped (%d VCPUs stopped)\n",
+    pr_info("RELM: VM '%s' stopped (%d VCPUs stopped)\n",
             vm->vm_name, stopped_vcpus);
 
     if (vm->ops && vm->ops->print_stats) {
@@ -748,3 +830,4 @@ int relm_stop_vm(struct relm_vm *vm)
     }
 
     return 0;
+}

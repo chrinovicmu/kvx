@@ -1,3 +1,4 @@
+#include <asm-generic/errno.h>
 #include <linux/slab.h>
 #include <linux/gfp.h>
 #include <linux/mm.h>
@@ -68,9 +69,9 @@ bool relm_ept_check_support(void)
     return true;
 }
 
-int relm_setup_ept(struct vcpu *vcpu)
+int relm_setup_ept(struct relm_vm *vm)
 {
-    if(!vcpu)
+    if(!vm)
         return -EINVAL; 
 
     if(!relm_ept_check_support())
@@ -79,16 +80,17 @@ int relm_setup_ept(struct vcpu *vcpu)
         return -ENOTSUPP; 
     }
 
+    /*
     if(!relm_ept_enabled(vcpu))
     {
         pr_err("RELM: EPT not enabled in execution controls\n"); 
         return -EINVAL; 
     }
-
-    vcpu->ept = relm_ept_context_create(); 
-    if(IS_ERR(vcpu->ept))
+*/ 
+    vm->ept = relm_ept_context_create(); 
+    if(IS_ERR(vm->ept))
     {
-        int err = PTR_ERR(vcpu->ept); 
+        int err = PTR_ERR(vm->ept); 
         vcpu->ept = NULL; 
         pr_err("RELM: Failed to create EPT context: %d\n"); 
         return err; 
@@ -96,14 +98,17 @@ int relm_setup_ept(struct vcpu *vcpu)
 
     CHECK_VMWRITE(EPT_POINTER, vcpu->ept->eptp); 
 
-    pr_info("RELM: EPT setup complete for VCPU %d (EPTP=0x%llx)\n", 
-            vcpu->vpid, vcpu->ept->eptp); 
+    pr_info("RELM: EPT setup complete for VM %d (EPTP=0x%llx)\n", 
+            vm->vm_id, vcpu->ept->eptp); 
 
     return 0; 
 }
 
-int relm_handle_ept_violation(struct vcpu *vcpu)
+int relm_handle_ept_violation(struct relm_vm *vm)
 {
+    if(!vm || vm->ept)
+        return -ENAVAIL; 
+
     uint64_t exit_qualification;
     uint64_t gpa; 
     bool data_read; 
@@ -132,7 +137,7 @@ int relm_handle_ept_violation(struct vcpu *vcpu)
     return -EFAULT; 
 }
 
-int relm_vcpu_handle_ept_misconfig(struct vcpu *vcpu)
+int relm_vcpu_handle_ept_misconfig(struct relm_vm *vm)
 {
     uint64_t gpa; 
     gpa = __vmread(GUEST_PHYSICAL_ADDRESS); 
@@ -141,8 +146,8 @@ int relm_vcpu_handle_ept_misconfig(struct vcpu *vcpu)
     pr_err("  Guest RIP: 0x%llx\n", __vmread(GUEST_RIP));
     pr_err("  This indicates a bug in EPT setup code!\n");
     
-    if(vcpu->ept)
-        relm_ept_dump_tables(vcpu->ept); 
+    if(vm->ept)
+        relm_ept_dump_tables(vm->ept); 
 
     return -EFAULT; 
 
@@ -198,7 +203,7 @@ static void relm_ept_free_table(void *table_va, int level)
         return; 
     }
 
-    for(i = 0; i < EPT_ENTRIES_PER_TABALE; i++)
+    for(i = 0; i < EPT_ENTRIES_PER_TABLE; i++)
     {
         ept_entry_t entry = entries[i]; 
 
@@ -214,7 +219,7 @@ static void relm_ept_free_table(void *table_va, int level)
 
         void *child_va = phys_to_virt(child_pa); 
 
-        relm_ept_free_table(child_va, level, -1); 
+        relm_ept_free_table(child_va, level - 1); 
     }
 
     free_page((unsigned)table_va);
@@ -241,7 +246,7 @@ void relm_ept_context_destroy(struct ept_context *ept)
 static inline void *relm_ept_alloc_table(void)
 {
     void *table = (void *)__get_free_page(GFP_KERNEL | __GFP_ZERO); 
-    if(_unlikely(!table)
+    if(_unlikely(!table))
     {
         pr_err("RELM: Failed to alloc EPT table\n");
         return NULL; 
